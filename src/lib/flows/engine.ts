@@ -36,6 +36,7 @@ import { supabaseAdmin } from "./admin-client";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
+  engineSendMedia,
   engineSendText,
 } from "./meta-send";
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
@@ -50,6 +51,7 @@ import {
   type ParsedInbound,
   type SendButtonsNodeConfig,
   type SendListNodeConfig,
+  type SendMediaNodeConfig,
   type SendMessageNodeConfig,
   type SetTagNodeConfig,
   type StartNodeConfig,
@@ -112,6 +114,7 @@ export function isAutoAdvancing(node_type: string): boolean {
   return (
     node_type === "start" ||
     node_type === "send_message" ||
+    node_type === "send_media" ||
     node_type === "condition" ||
     node_type === "set_tag"
   );
@@ -588,6 +591,36 @@ async function advanceFromNodeKey(
           detail: err instanceof Error ? err.message : String(err),
         });
         await endRun(db, run.id, "failed", "send_text_failed");
+        return { outcome: "completed" };
+      }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "send_media") {
+      const cfg = node.config as unknown as SendMediaNodeConfig;
+      try {
+        const { whatsapp_message_id } = await engineSendMedia({
+          userId: run.user_id,
+          conversationId: run.conversation_id!,
+          contactId: run.contact_id!,
+          kind: cfg.media_type,
+          link: cfg.media_url,
+          caption: cfg.caption
+            ? interpolateVars(cfg.caption, run.vars)
+            : undefined,
+          filename: cfg.filename,
+        });
+        await logEvent(db, run.id, "message_sent", node.node_key, {
+          node_type: "send_media",
+          media_type: cfg.media_type,
+          whatsapp_message_id,
+        });
+      } catch (err) {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "send_media_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+        await endRun(db, run.id, "failed", "send_media_failed");
         return { outcome: "completed" };
       }
       currentKey = cfg.next_node_key;

@@ -1,9 +1,11 @@
 import {
   sendInteractiveButtons,
   sendInteractiveList,
+  sendMediaMessage,
   sendTextMessage,
   type InteractiveButton,
   type InteractiveListSection,
+  type MediaKind,
 } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
@@ -127,6 +129,122 @@ export async function engineSendText(
     .from('conversations')
     .update({
       last_message_text: args.text,
+      last_message_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', args.conversationId)
+
+  return { whatsapp_message_id: waMessageId }
+}
+
+interface SendMediaEngineArgs {
+  userId: string
+  conversationId: string
+  contactId: string
+  kind: MediaKind
+  /** Public URL Meta fetches at send time. */
+  link: string
+  caption?: string
+  /** Document-only; ignored by Meta for image/video. */
+  filename?: string
+}
+
+/**
+ * Send an image / video / document from the Flows engine.
+ *
+ * Used by the runner's `send_media` node. Auto-advances after the
+ * send lands (same suspend semantics as send_message). Same
+ * phone-variant retry + DB persistence as the text/interactive
+ * senders; persists the outgoing message with `content_type` matching
+ * the media kind so the inbox renders the right preview.
+ */
+export async function engineSendMedia(
+  args: SendMediaEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  const db = supabaseAdmin()
+
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('id, phone')
+    .eq('id', args.contactId)
+    .eq('user_id', args.userId)
+    .maybeSingle()
+  if (contactErr || !contact?.phone) {
+    throw new Error('contact not found for this user')
+  }
+
+  const sanitized = sanitizePhoneForMeta(contact.phone)
+  if (!isValidE164(sanitized)) {
+    throw new Error(`contact phone invalid: ${contact.phone}`)
+  }
+
+  const { data: config, error: configErr } = await db
+    .from('whatsapp_config')
+    .select('*')
+    .eq('user_id', args.userId)
+    .single()
+  if (configErr || !config) {
+    throw new Error('WhatsApp not configured for this account')
+  }
+
+  const accessToken = decrypt(config.access_token)
+
+  const attempt = async (phone: string): Promise<string> => {
+    const r = await sendMediaMessage({
+      phoneNumberId: config.phone_number_id,
+      accessToken,
+      to: phone,
+      kind: args.kind,
+      link: args.link,
+      caption: args.caption,
+      filename: args.filename,
+    })
+    return r.messageId
+  }
+
+  const variants = phoneVariants(sanitized)
+  let workingPhone = sanitized
+  let waMessageId = ''
+  let lastError: unknown = null
+  for (const v of variants) {
+    try {
+      waMessageId = await attempt(v)
+      workingPhone = v
+      lastError = null
+      break
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!isRecipientNotAllowedError(msg)) throw err
+      lastError = err
+    }
+  }
+  if (lastError) throw lastError
+
+  if (workingPhone !== sanitized) {
+    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+  }
+
+  // content_type='image'|'video'|'document' — these are already in the
+  // messages_content_type_check constraint (migration 001 + 010).
+  // content_text carries the caption (or empty) so the conversation
+  // list preview shows something meaningful when the user glances at it.
+  const preview = args.caption?.trim() || `[${args.kind}]`
+  const { error: msgErr } = await db.from('messages').insert({
+    conversation_id: args.conversationId,
+    sender_type: 'bot',
+    content_type: args.kind,
+    content_text: args.caption ?? null,
+    message_id: waMessageId,
+    status: 'sent',
+  })
+  if (msgErr) {
+    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  }
+
+  await db
+    .from('conversations')
+    .update({
+      last_message_text: preview,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })

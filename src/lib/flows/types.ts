@@ -68,6 +68,35 @@ export interface SendListNodeConfig {
   }>;
 }
 
+/**
+ * Sends a single image / video / document via WhatsApp, then
+ * auto-advances. The media file is uploaded to the `flow-media`
+ * Supabase Storage bucket by the builder; `media_url` is the public
+ * URL Meta fetches at send time.
+ *
+ * Why one node with a `media_type` discriminator (rather than three
+ * separate node types): Meta's send-side payload differs only in the
+ * top-level key (`image` / `video` / `document`) and the
+ * filename-on-document quirk. Modeling three node types would triple
+ * the builder forms, engine cases, and add-menu entries for no
+ * meaningful behavioural difference.
+ */
+export interface SendMediaNodeConfig {
+  media_type: "image" | "video" | "document";
+  /** Public URL Meta will fetch. Uploaded via the builder's file picker. */
+  media_url: string;
+  /** Optional caption shown under the media (Meta caps at 1024 chars). */
+  caption?: string;
+  /**
+   * Filename shown in the recipient's chat. Documents only — Meta
+   * ignores it for image/video. Defaults to the file's original name
+   * at upload time; the user can edit it.
+   */
+  filename?: string;
+  /** Auto-advance target after the send lands at Meta. */
+  next_node_key: string;
+}
+
 export interface HandoffNodeConfig {
   /** Optional internal note written to flow_run_events.payload.note. */
   note?: string;
@@ -160,6 +189,7 @@ export type FlowNodeConfig =
   | { node_type: "send_message"; config: SendMessageNodeConfig }
   | { node_type: "send_buttons"; config: SendButtonsNodeConfig }
   | { node_type: "send_list"; config: SendListNodeConfig }
+  | { node_type: "send_media"; config: SendMediaNodeConfig }
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }

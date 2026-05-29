@@ -40,6 +40,9 @@ import {
   Inbox,
   GitFork,
   Tag,
+  Paperclip,
+  Upload,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -66,6 +69,7 @@ import {
   type ValidationIssue,
 } from "@/lib/flows/validate";
 import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
+import { createClient } from "@/lib/supabase/client";
 
 interface FlowBuilderProps {
   initialFlow: FlowRow;
@@ -83,6 +87,7 @@ type NodeType =
   | "send_message"
   | "send_buttons"
   | "send_list"
+  | "send_media"
   | "collect_input"
   | "condition"
   | "set_tag"
@@ -129,6 +134,11 @@ const NODE_META: Record<
     label: "Send list",
     icon: ListPlus,
     color: "text-indigo-400",
+  },
+  send_media: {
+    label: "Send media",
+    icon: Paperclip,
+    color: "text-cyan-400",
   },
   collect_input: {
     label: "Collect input",
@@ -225,6 +235,21 @@ function summarizeNode(node: BuilderNode): string | null {
         ? `${rowCount} option${rowCount === 1 ? "" : "s"} across ${sections.length} section${sections.length === 1 ? "" : "s"}`
         : null;
     }
+    case "send_media": {
+      const mediaType =
+        typeof cfg.media_type === "string" ? cfg.media_type : "";
+      const filename = typeof cfg.filename === "string" ? cfg.filename : "";
+      const url = typeof cfg.media_url === "string" ? cfg.media_url : "";
+      const caption = typeof cfg.caption === "string" ? cfg.caption : "";
+      const label = mediaType
+        ? mediaType.charAt(0).toUpperCase() + mediaType.slice(1)
+        : "Media";
+      if (!url) return `${label} (no file uploaded)`;
+      const name = filename || url.split("/").pop() || "file";
+      return caption
+        ? `${label}: ${truncate(name, 30)} · ${truncate(caption, 40)}`
+        : `${label}: ${truncate(name, 60)}`;
+    }
     case "collect_input": {
       const prompt = typeof cfg.prompt_text === "string" ? cfg.prompt_text : "";
       const varKey = typeof cfg.var_key === "string" ? cfg.var_key : "";
@@ -300,6 +325,14 @@ function defaultConfigFor(type: NodeType): Record<string, unknown> {
             ],
           },
         ],
+      };
+    case "send_media":
+      return {
+        media_type: "image",
+        media_url: "",
+        caption: "",
+        filename: "",
+        next_node_key: "",
       };
     case "collect_input":
       return {
@@ -1133,6 +1166,15 @@ function NodeConfigForm({
         />
       )}
 
+      {node.node_type === "send_media" && (
+        <SendMediaForm
+          cfg={cfg as SendMediaCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      )}
+
       {node.node_type === "collect_input" && (
         <>
           <TextRow
@@ -1891,6 +1933,230 @@ function SetTagForm({
   );
 }
 
+// ---- send_media form ----
+
+interface SendMediaCfg {
+  media_type?: "image" | "video" | "document";
+  media_url?: string;
+  caption?: string;
+  filename?: string;
+  next_node_key?: string;
+}
+
+// Mirrors the bucket's allowed_mime_types from migration 016. Kept in
+// sync with the storage policy so the picker rejects unsupported files
+// before they hit the network rather than failing with a confusing
+// Supabase RLS / mime-type error.
+const MEDIA_ACCEPT: Record<NonNullable<SendMediaCfg["media_type"]>, string> = {
+  image: "image/png,image/jpeg,image/webp",
+  video: "video/mp4,video/3gpp",
+  document:
+    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
+};
+
+const FLOW_MEDIA_BUCKET = "flow-media";
+// 16 MB — matches the bucket file_size_limit set in migration 016.
+const FLOW_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+
+function SendMediaForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: SendMediaCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const mediaType = cfg.media_type ?? "image";
+  const isDocument = mediaType === "document";
+  const displayName =
+    cfg.filename ||
+    (cfg.media_url ? cfg.media_url.split("/").pop() ?? "" : "");
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      if (file.size > FLOW_MEDIA_MAX_BYTES) {
+        toast.error(
+          `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — limit is 16 MB.`,
+        );
+        return;
+      }
+      setUploading(true);
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+          error: userErr,
+        } = await supabase.auth.getUser();
+        if (userErr || !user) {
+          throw new Error("Not signed in.");
+        }
+        // Path convention matches migration 016's RLS policy: first
+        // segment must equal auth.uid(). Timestamp + random suffix
+        // prevents collisions between two builders open at once.
+        const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin";
+        const safeBase = file.name
+          .replace(/\.[^.]+$/, "")
+          .replace(/[^a-zA-Z0-9_-]+/g, "_")
+          .slice(0, 40) || "file";
+        const path = `${user.id}/${Date.now()}-${safeBase}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from(FLOW_MEDIA_BUCKET)
+          .upload(path, file, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: file.type,
+          });
+        if (upErr) throw new Error(upErr.message);
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from(FLOW_MEDIA_BUCKET).getPublicUrl(path);
+        // Patch all three fields in one call so the form doesn't
+        // re-render with a half-uploaded state.
+        onUpdateConfig({
+          media_url: publicUrl,
+          filename: file.name,
+        });
+        toast.success("File uploaded.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed.";
+        toast.error(msg);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [onUpdateConfig],
+  );
+
+  const handleClear = () => {
+    onUpdateConfig({ media_url: "", filename: "" });
+  };
+
+  return (
+    <>
+      <div>
+        <label className="mb-1 block text-xs text-slate-400">Media type</label>
+        <Select
+          value={mediaType}
+          onValueChange={(v) => {
+            // Changing type clears the existing file — the bucket
+            // accepts different MIME sets per type and a previously
+            // uploaded PDF can't be sent as an image.
+            onUpdateConfig({
+              media_type: v as NonNullable<SendMediaCfg["media_type"]>,
+              media_url: "",
+              filename: "",
+            });
+          }}
+        >
+          <SelectTrigger className="bg-slate-800">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="image">Image (PNG, JPEG, WebP)</SelectItem>
+            <SelectItem value="video">Video (MP4, 3GP)</SelectItem>
+            <SelectItem value="document">
+              Document (PDF, Word, Excel, PowerPoint, TXT)
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs text-slate-400">File</label>
+        {cfg.media_url ? (
+          <div className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-xs">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+            <a
+              href={cfg.media_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 flex-1 truncate text-slate-200 hover:text-cyan-300"
+              title={displayName || cfg.media_url}
+            >
+              {displayName || cfg.media_url}
+            </a>
+            <button
+              type="button"
+              onClick={handleClear}
+              className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+              aria-label="Remove file"
+              disabled={uploading}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-slate-700 bg-slate-900 px-3 py-4 text-xs text-slate-400 transition-colors hover:border-slate-600 hover:bg-slate-800 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {uploading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading…
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5" />
+                Click to upload (max 16 MB)
+              </>
+            )}
+          </button>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={MEDIA_ACCEPT[mediaType]}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            // Reset so picking the same file twice still fires onChange.
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      <TextRow
+        label="Caption (optional, shown under the media)"
+        value={cfg.caption ?? ""}
+        onChange={(v) => onUpdateConfig({ caption: v })}
+        rows={2}
+      />
+
+      {isDocument && (
+        <div>
+          <label className="mb-1 block text-xs text-slate-400">
+            Filename shown to the customer (documents only)
+          </label>
+          <Input
+            value={cfg.filename ?? ""}
+            onChange={(e) => onUpdateConfig({ filename: e.target.value })}
+            placeholder="invoice.pdf"
+            className="bg-slate-800 text-xs"
+          />
+        </div>
+      )}
+
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="After sending, advance to"
+      />
+    </>
+  );
+}
+
 // ---- Smaller field components ----
 
 function TextRow({
@@ -2006,6 +2272,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     "send_buttons",
     "send_list",
     "send_message",
+    "send_media",
     "collect_input",
     "condition",
     "set_tag",
