@@ -9,6 +9,48 @@ Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
 
+## [Unreleased]
+
+Foundation for multi-user accounts. Every wacrm install becomes
+multi-tenant on the database side: a single user's signup creates a
+fresh "account", and every row is scoped to that account rather than
+to the user directly. The user-visible invite / members surface lands
+in follow-up PRs gated by the `'account_sharing'` beta feature flag —
+this release is wiring with no behaviour change on its own. Existing
+self-hosted instances keep working: every existing user is backfilled
+as the sole owner of their own account and sees identical data.
+
+### Changed
+
+- **Tenancy moves from per-user to per-account.** RLS on every
+  domain table (contacts, conversations, messages, broadcasts,
+  automations, flows, pipelines, templates, tags, …) now checks
+  account membership via a new SECURITY DEFINER helper
+  `is_account_member(account_id, min_role)` instead of
+  `auth.uid() = user_id`. The `user_id` columns stay on every row
+  for assignment / audit but no longer enforce isolation.
+- **WhatsApp config is one-per-account, not one-per-user.** The
+  `whatsapp_config.UNIQUE(user_id)` constraint is replaced by
+  `UNIQUE(account_id)`.
+- **`flow_runs` idempotency key swaps to `(account_id, contact_id)`**
+  so two accounts sharing a contact phone number can each run their
+  own flows independently.
+- **The signup trigger (`handle_new_user`) now also creates a
+  personal account** and links the new profile to it as `owner`.
+
+### Migration required
+
+Apply against your Supabase project before deploying this version:
+
+- `supabase/migrations/017_account_sharing.sql` — introduces the
+  `accounts` and `account_invitations` tables plus an
+  `account_role_enum` type; adds `account_id` to every
+  user-scoped table and backfills it; rewrites every RLS policy;
+  replaces the new-user trigger. Idempotent. **No data loss** —
+  every existing user is mapped to a freshly-created account
+  with role `owner` and every existing row of theirs is linked
+  to that account.
+
 ## [0.2.2] — 2026-05-29
 
 Flow nodes can now send media. Closes the most-requested gap from user
