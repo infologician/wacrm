@@ -9,6 +9,29 @@ Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
 
+## [0.7.0] — 2026-07-02
+
+Promotes the AI assistant to a first-class **AI Agents** section in the
+sidebar — it's no longer tucked inside Settings.
+
+### Added
+
+- **AI Agents (sidebar).** A dedicated `/agents` area with two tabs:
+  - **Playground** — a test chat to message your agent and see its
+    grounded, multi-turn replies (and where it would hand off to a human)
+    *before* it ever answers a real customer. Runs the exact same path as
+    the auto-reply bot (knowledge-base retrieval + your provider), and
+    works even before you flip the master switch on, so you can try, then
+    enable. Backed by `POST /api/ai/playground`.
+  - **Setup** — the provider/key, business context, knowledge base, and
+    auto-reply controls (moved here from Settings → AI Assistant).
+
+### Changed
+
+- The AI configuration moved out of **Settings → AI Assistant** into the
+  new **AI Agents** section. No data change — same account config, new
+  home. No migration required.
+
 ## [0.6.0] — 2026-07-02
 
 Adds an **AI knowledge base** so the assistant (0.5.0) can answer from

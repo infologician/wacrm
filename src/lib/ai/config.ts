@@ -30,7 +30,9 @@ const CONFIG_COLUMNS =
 export async function loadAiConfig(
   db: SupabaseClient,
   accountId: string,
+  opts: { requireActive?: boolean } = {},
 ): Promise<AiConfig | null> {
+  const { requireActive = true } = opts
   const { data, error } = await db
     .from('ai_configs')
     .select(CONFIG_COLUMNS)
@@ -41,7 +43,9 @@ export async function loadAiConfig(
   if (!data) return null
 
   const row = data as AiConfigRow
-  if (!row.is_active) return null
+  // The Playground passes requireActive:false so an admin can test the
+  // agent before flipping the master switch on.
+  if (requireActive && !row.is_active) return null
   // Defensive: the column is NOT NULL, but a partial write / manual DB
   // edit could leave it empty. Treat a missing key as "not configured"
   // rather than letting decrypt() throw on null.
