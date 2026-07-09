@@ -18,8 +18,30 @@ const h = vi.hoisted(() => ({
     contact: null as Record<string, unknown> | null,
     contactUpdatePayload: null as Record<string, unknown> | null,
     noteInsertPayload: null as Record<string, unknown> | null,
+    customFields: [] as { id: string; field_name: string }[],
+    customValues: [] as { custom_field_id: string; value: string | null }[],
+    customFieldInserts: [] as Record<string, unknown>[],
+    customValueUpserts: [] as Record<string, unknown>[],
   },
 }))
+
+const ALL_CUSTOM_FIELD_NAMES = [
+  'City',
+  'Qualification',
+  'Career Goal',
+  'Interested in Call',
+  'Preferred Call Time',
+]
+
+/** Fixture: all 5 custom fields already defined and already filled. */
+function fullyFilledCustomFields() {
+  const fields = ALL_CUSTOM_FIELD_NAMES.map((field_name, i) => ({
+    id: `cf-${i + 1}`,
+    field_name,
+  }))
+  const values = fields.map((f) => ({ custom_field_id: f.id, value: 'already set' }))
+  return { fields, values }
+}
 
 vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
 vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
@@ -59,6 +81,43 @@ vi.mock('./admin-client', () => ({
         return {
           insert: (payload: Record<string, unknown>) => {
             h.state.noteInsertPayload = payload
+            return Promise.resolve({ error: null })
+          },
+        }
+      }
+      if (table === 'custom_fields') {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: () =>
+                Promise.resolve({ data: h.state.customFields, error: null }),
+            }),
+          }),
+          insert: (payload: Record<string, unknown>) => {
+            h.state.customFieldInserts.push(payload)
+            const created = {
+              id: `cf-new-${h.state.customFields.length + 1}`,
+              field_name: payload.field_name as string,
+            }
+            h.state.customFields.push(created)
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ data: created, error: null }),
+              }),
+            }
+          },
+        }
+      }
+      if (table === 'contact_custom_values') {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: () =>
+                Promise.resolve({ data: h.state.customValues, error: null }),
+            }),
+          }),
+          upsert: (payload: Record<string, unknown>) => {
+            h.state.customValueUpserts.push(payload)
             return Promise.resolve({ error: null })
           },
         }
@@ -120,6 +179,10 @@ beforeEach(() => {
   h.state.contact = { name: null, email: null, company: null }
   h.state.contactUpdatePayload = null
   h.state.noteInsertPayload = null
+  h.state.customFields = []
+  h.state.customValues = []
+  h.state.customFieldInserts = []
+  h.state.customValueUpserts = []
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -244,8 +307,11 @@ describe('dispatchInboundToAiReply — lead extraction', () => {
     })
   })
 
-  it('skips the extraction call entirely when the contact is already fully populated', async () => {
+  it('skips the extraction call entirely when contact + all custom fields are already fully populated', async () => {
     h.state.contact = { name: 'Jane', email: 'jane@x.com', company: 'Acme' }
+    const { fields, values } = fullyFilledCustomFields()
+    h.state.customFields = fields
+    h.state.customValues = values
     await dispatchInboundToAiReply(ARGS)
     expect(h.extractLeadDetails).not.toHaveBeenCalled()
     expect(h.state.contactUpdatePayload).toBeNull()
@@ -262,5 +328,65 @@ describe('dispatchInboundToAiReply — lead extraction', () => {
     h.extractLeadDetails.mockRejectedValue(new Error('provider exploded'))
     await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
     expect(h.engineSendText).toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — custom field extraction', () => {
+  it('still runs extraction (does not early-skip) when core fields are filled but custom fields are missing', async () => {
+    h.state.contact = { name: 'Jane', email: 'jane@x.com', company: 'Acme' }
+    h.extractLeadDetails.mockResolvedValue({ city: 'Austin' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.extractLeadDetails).toHaveBeenCalled()
+  })
+
+  it('creates the custom_fields definition when missing, then upserts the value', async () => {
+    h.extractLeadDetails.mockResolvedValue({ city: 'Austin', preferredCallTime: 'Mornings' })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.state.customFieldInserts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field_name: 'City',
+          field_type: 'text',
+          account_id: 'acct-1',
+          user_id: 'user-1',
+        }),
+        expect.objectContaining({ field_name: 'Preferred Call Time' }),
+      ]),
+    )
+    expect(h.state.customValueUpserts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contact_id: 'contact-1', value: 'Austin' }),
+        expect.objectContaining({ contact_id: 'contact-1', value: 'Mornings' }),
+      ]),
+    )
+  })
+
+  it('reuses an existing custom_fields row instead of creating a duplicate', async () => {
+    h.state.customFields = [{ id: 'cf-city', field_name: 'City' }]
+    h.state.customValues = [] // field exists, but no value yet
+    h.extractLeadDetails.mockResolvedValue({ city: 'Austin' })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.state.customFieldInserts).toEqual([])
+    expect(h.state.customValueUpserts).toEqual([
+      { contact_id: 'contact-1', custom_field_id: 'cf-city', value: 'Austin' },
+    ])
+  })
+
+  it('never overwrites a custom field that already has a value', async () => {
+    h.state.customFields = [{ id: 'cf-city', field_name: 'City' }]
+    h.state.customValues = [{ custom_field_id: 'cf-city', value: 'Existing City' }]
+    h.extractLeadDetails.mockResolvedValue({ city: 'Austin', qualification: "Bachelor's" })
+    await dispatchInboundToAiReply(ARGS)
+
+    // City already has a value — no insert/upsert touches it.
+    expect(h.state.customValueUpserts).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ custom_field_id: 'cf-city' })]),
+    )
+    // Qualification was empty — it does get filled in.
+    expect(h.state.customFieldInserts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field_name: 'Qualification' })]),
+    )
   })
 })

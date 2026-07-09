@@ -54,6 +54,16 @@ export interface LeadDetails {
   /** Short free-text summary (interest, budget, pain point, etc.) worth
    *  surfacing to a human agent. */
   notes?: string
+  /** City the customer says they're located in. */
+  city?: string
+  /** Customer's stated education/qualification level. */
+  qualification?: string
+  /** Career or goal the customer says they're pursuing. */
+  careerGoal?: string
+  /** Short yes/no/maybe read on whether the customer wants a phone call. */
+  interestedInCall?: string
+  /** Day/time window the customer says they prefer to be called. */
+  preferredCallTime?: string
 }
 
 /**
