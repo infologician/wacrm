@@ -42,6 +42,21 @@ export interface GenerateResult {
 }
 
 /**
+ * Structured lead fields pulled out of a conversation transcript by
+ * `extractLeadDetails`. Every field is optional — the model omits
+ * anything it can't confidently infer, and callers only ever fill in
+ * blanks on the contact record, never overwrite existing data.
+ */
+export interface LeadDetails {
+  name?: string
+  email?: string
+  company?: string
+  /** Short free-text summary (interest, budget, pain point, etc.) worth
+   *  surfacing to a human agent. */
+  notes?: string
+}
+
+/**
  * Typed error for every AI failure mode. `status` maps cleanly to an
  * HTTP response in the draft route; `code` lets the UI/tests branch
  * (invalid_key vs rate_limited vs timeout, etc.).

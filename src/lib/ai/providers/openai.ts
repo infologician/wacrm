@@ -1,5 +1,5 @@
 import { AiError } from '../types'
-import { MAX_OUTPUT_TOKENS } from '../defaults'
+import { MAX_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS } from '../defaults'
 import {
   mergeConsecutive,
   providerHttpError,
@@ -36,6 +36,51 @@ export async function generateOpenAi(args: ProviderArgs): Promise<string> {
           ...mergeConsecutive(messages),
         ],
         max_completion_tokens: MAX_OUTPUT_TOKENS,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    throw toNetworkError(err)
+  }
+
+  if (!res.ok) {
+    throw await providerHttpError('OpenAI', res)
+  }
+
+  const data = (await res.json().catch(() => null)) as OpenAiResponse | null
+  const text = data?.choices?.[0]?.message?.content
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    throw new AiError('OpenAI returned an empty response.', {
+      code: 'empty_response',
+    })
+  }
+  return text
+}
+
+/**
+ * Call OpenAI's Chat Completions endpoint in JSON mode to pull structured
+ * lead fields out of a conversation. Returns the raw JSON text (parsed by
+ * `extractLeadDetails`).
+ */
+export async function extractLeadOpenAi(args: ProviderArgs): Promise<string> {
+  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+
+  let res: Response
+  try {
+    res = await fetch(OPENAI_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...mergeConsecutive(messages),
+        ],
+        response_format: { type: 'json_object' },
+        max_completion_tokens: MAX_EXTRACTION_OUTPUT_TOKENS,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })
