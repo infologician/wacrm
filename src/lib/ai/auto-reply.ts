@@ -1,11 +1,14 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
+import { extractLeadDetails } from './lead-extraction'
 import { buildSystemPrompt } from './defaults'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
+import type { AiConfig, ChatMessage } from './types'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -131,7 +134,68 @@ export async function dispatchInboundToAiReply(
       contactId,
       text,
     })
+
+    // Best-effort: pull structured lead details out of the conversation
+    // now that the reply landed. Isolated in its own try/catch — a
+    // failure here must never read as an auto-reply dispatch failure,
+    // since the customer-facing send already succeeded.
+    try {
+      await extractAndSaveLeadDetails({
+        db,
+        config,
+        contactId,
+        configOwnerUserId,
+        messages: [...messages, { role: 'assistant', content: text }],
+      })
+    } catch (err) {
+      console.error('[lead-extraction] failed:', err)
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
+  }
+}
+
+/**
+ * Fill in whatever `contacts` fields are still empty (name/email/company)
+ * from the model's best-effort read of the transcript, and log a short
+ * summary note if one was found. Never overwrites data already on the
+ * contact. Skips the LLM call entirely if the contact is already fully
+ * populated.
+ */
+async function extractAndSaveLeadDetails(args: {
+  db: SupabaseClient
+  config: AiConfig
+  contactId: string
+  configOwnerUserId: string
+  messages: ChatMessage[]
+}): Promise<void> {
+  const { db, config, contactId, configOwnerUserId, messages } = args
+
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('name, email, company')
+    .eq('id', contactId)
+    .maybeSingle()
+  if (contactErr || !contact) return
+  if (contact.name && contact.email && contact.company) return // nothing to fill in
+
+  const details = await extractLeadDetails({ config, messages })
+  if (!details) return
+
+  const patch: Record<string, string> = {}
+  if (!contact.name && details.name) patch.name = details.name
+  if (!contact.email && details.email) patch.email = details.email
+  if (!contact.company && details.company) patch.company = details.company
+
+  if (Object.keys(patch).length > 0) {
+    await db.from('contacts').update(patch).eq('id', contactId)
+  }
+
+  if (details.notes) {
+    await db.from('contact_notes').insert({
+      contact_id: contactId,
+      user_id: configOwnerUserId,
+      note_text: `AI-extracted lead details: ${details.notes}`,
+    })
   }
 }

@@ -8,12 +8,16 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
+  extractLeadDetails: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
+    contact: null as Record<string, unknown> | null,
+    contactUpdatePayload: null as Record<string, unknown> | null,
+    noteInsertPayload: null as Record<string, unknown> | null,
   },
 }))
 
@@ -21,6 +25,7 @@ vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
 vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
+vi.mock('./lead-extraction', () => ({ extractLeadDetails: h.extractLeadDetails }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
@@ -35,6 +40,28 @@ vi.mock('./admin-client', () => ({
             Promise.resolve({ data: h.state.autoResponders, error: null }),
         }
         return chain
+      }
+      if (table === 'contacts') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({ data: h.state.contact, error: null }),
+            }),
+          }),
+          update: (payload: Record<string, unknown>) => {
+            h.state.contactUpdatePayload = payload
+            return { eq: () => Promise.resolve({ error: null }) }
+          },
+        }
+      }
+      if (table === 'contact_notes') {
+        return {
+          insert: (payload: Record<string, unknown>) => {
+            h.state.noteInsertPayload = payload
+            return Promise.resolve({ error: null })
+          },
+        }
       }
       // conversations
       return {
@@ -90,11 +117,15 @@ beforeEach(() => {
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
+  h.state.contact = { name: null, email: null, company: null }
+  h.state.contactUpdatePayload = null
+  h.state.noteInsertPayload = null
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
   h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false })
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
+  h.extractLeadDetails.mockResolvedValue(null)
 })
 
 describe('dispatchInboundToAiReply — eligibility gates', () => {
@@ -192,5 +223,44 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.updatePayload).toEqual({ ai_autoreply_disabled: true })
     expect(h.state.rpcCalls).toHaveLength(0)
+  })
+})
+
+describe('dispatchInboundToAiReply — lead extraction', () => {
+  it('fills in only the missing contact fields, without overwriting existing ones', async () => {
+    h.state.contact = { name: null, email: 'existing@x.com', company: null }
+    h.extractLeadDetails.mockResolvedValue({
+      name: 'Jane Doe',
+      email: 'ignored@x.com',
+      company: 'Acme',
+      notes: 'Wants a demo of the pro plan.',
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.contactUpdatePayload).toEqual({ name: 'Jane Doe', company: 'Acme' })
+    expect(h.state.noteInsertPayload).toEqual({
+      contact_id: 'contact-1',
+      user_id: 'user-1',
+      note_text: 'AI-extracted lead details: Wants a demo of the pro plan.',
+    })
+  })
+
+  it('skips the extraction call entirely when the contact is already fully populated', async () => {
+    h.state.contact = { name: 'Jane', email: 'jane@x.com', company: 'Acme' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.extractLeadDetails).not.toHaveBeenCalled()
+    expect(h.state.contactUpdatePayload).toBeNull()
+  })
+
+  it('updates nothing when extraction finds no usable details', async () => {
+    h.extractLeadDetails.mockResolvedValue(null)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.contactUpdatePayload).toBeNull()
+    expect(h.state.noteInsertPayload).toBeNull()
+  })
+
+  it('still completes (reply already sent) if extraction throws', async () => {
+    h.extractLeadDetails.mockRejectedValue(new Error('provider exploded'))
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 })
