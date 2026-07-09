@@ -69,6 +69,11 @@ function parseLeadDetails(raw: string): LeadDetails | null {
     email: clean(record.email),
     company: clean(record.company),
     notes: clean(record.notes),
+    city: clean(record.city),
+    qualification: clean(record.qualification),
+    careerGoal: clean(record.careerGoal),
+    interestedInCall: clean(record.interestedInCall),
+    preferredCallTime: clean(record.preferredCallTime),
   }
 
   const hasAny = Object.values(details).some((v) => v !== undefined)

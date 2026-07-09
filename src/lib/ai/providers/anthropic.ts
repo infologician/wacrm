@@ -42,6 +42,28 @@ const LEAD_DETAILS_TOOL = {
         description:
           'A short 1-2 sentence summary of what the customer wants or needs',
       },
+      city: {
+        type: 'string',
+        description: 'The city the customer says they are located in',
+      },
+      qualification: {
+        type: 'string',
+        description: "The customer's stated education or qualification level",
+      },
+      careerGoal: {
+        type: 'string',
+        description: 'The career or goal the customer says they are pursuing',
+      },
+      interestedInCall: {
+        type: 'string',
+        description:
+          'A short yes/no/maybe read on whether the customer wants a phone call',
+      },
+      preferredCallTime: {
+        type: 'string',
+        description:
+          'The day/time window the customer says they prefer to be called',
+      },
     },
   },
 }

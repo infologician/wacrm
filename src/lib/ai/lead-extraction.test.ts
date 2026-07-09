@@ -72,6 +72,42 @@ describe('extractLeadDetails — OpenAI', () => {
     })
   })
 
+  it('parses the 5 custom-field extensions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  city: 'Austin',
+                  qualification: "Bachelor's in CS",
+                  careerGoal: 'Become a data scientist',
+                  interestedInCall: 'Yes',
+                  preferredCallTime: 'Weekday mornings',
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    )
+
+    const res = await extractLeadDetails({
+      config: config(),
+      messages: [{ role: 'user', content: "I'm in Austin, call me weekday mornings" }],
+    })
+
+    expect(res).toEqual({
+      city: 'Austin',
+      qualification: "Bachelor's in CS",
+      careerGoal: 'Become a data scientist',
+      interestedInCall: 'Yes',
+      preferredCallTime: 'Weekday mornings',
+    })
+  })
+
   it('requests JSON mode', async () => {
     const fetchMock = vi
       .fn()
@@ -154,6 +190,68 @@ describe('extractLeadDetails — Anthropic', () => {
     })
 
     expect(res).toEqual({ name: 'Jane Doe', company: 'Acme' })
+  })
+
+  it('parses the 5 custom-field extensions from the tool input', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        okResponse({
+          content: [
+            {
+              type: 'tool_use',
+              name: 'record_lead_details',
+              input: {
+                city: 'Austin',
+                qualification: "Bachelor's in CS",
+                careerGoal: 'Become a data scientist',
+                interestedInCall: 'Yes',
+                preferredCallTime: 'Weekday mornings',
+              },
+            },
+          ],
+        }),
+      ),
+    )
+
+    const res = await extractLeadDetails({
+      config: config({ provider: 'anthropic' }),
+      messages: [{ role: 'user', content: "I'm in Austin, call me weekday mornings" }],
+    })
+
+    expect(res).toEqual({
+      city: 'Austin',
+      qualification: "Bachelor's in CS",
+      careerGoal: 'Become a data scientist',
+      interestedInCall: 'Yes',
+      preferredCallTime: 'Weekday mornings',
+    })
+  })
+
+  it('declares the 5 custom fields on the forced tool schema', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({
+        content: [{ type: 'tool_use', name: 'record_lead_details', input: {} }],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await extractLeadDetails({
+      config: config({ provider: 'anthropic' }),
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const properties = body.tools[0].input_schema.properties
+    expect(Object.keys(properties)).toEqual(
+      expect.arrayContaining([
+        'city',
+        'qualification',
+        'careerGoal',
+        'interestedInCall',
+        'preferredCallTime',
+      ]),
+    )
   })
 
   it('forces the tool call via tool_choice', async () => {
