@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import type { Contact, Tag, ContactTag } from '@/types';
+import type { Contact, Tag, ContactTag, CustomField } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -38,6 +38,7 @@ import {
   Search,
   Plus,
   Upload,
+  Download,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -59,8 +60,38 @@ import { Checkbox } from '@/components/ui/checkbox';
 
 const PAGE_SIZE = 25;
 
+// Supabase caps a single request at 1000 rows, so the full-list fetches used
+// by the CSV export page through the result set in batches of this size.
+const EXPORT_BATCH_SIZE = 1000;
+
 interface ContactWithTags extends Contact {
   tags?: Tag[];
+}
+
+/**
+ * CSV field escaping per RFC 4180: only fields containing a comma, double
+ * quote, or newline need quoting, and inner quotes are doubled.
+ */
+function escapeCsvField(value: string): string {
+  return /[",\n\r]/.test(value)
+    ? `"${value.replace(/"/g, '""')}"`
+    : value;
+}
+
+function toCsv(rows: string[][]): string {
+  return rows.map((r) => r.map(escapeCsvField).join(',')).join('\n');
+}
+
+function downloadBlob(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export default function ContactsPage() {
@@ -87,6 +118,7 @@ export default function ContactsPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Bulk selection (page-scoped — only the loaded rows are selectable)
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -312,6 +344,107 @@ export default function ContactsPage() {
     setBulkDeleteOpen(false);
   }
 
+  // Export ALL contacts to CSV — ignores the active search / tag filters on
+  // purpose. Each field lands in its own column: the fixed contact columns
+  // plus one column per custom field. Because Supabase caps a request at
+  // 1000 rows, every list fetch here is paginated to completion.
+  async function handleExport() {
+    setExporting(true);
+    try {
+      // Fetch every row of a table in EXPORT_BATCH_SIZE pages so nothing is
+      // silently truncated at Supabase's 1000-row ceiling.
+      async function fetchAll<T>(
+        table: string,
+        columns: string,
+        order?: { column: string; ascending: boolean }
+      ): Promise<T[]> {
+        const all: T[] = [];
+        for (let offset = 0; ; offset += EXPORT_BATCH_SIZE) {
+          let query = supabase
+            .from(table)
+            .select(columns)
+            .range(offset, offset + EXPORT_BATCH_SIZE - 1);
+          if (order) {
+            query = query.order(order.column, { ascending: order.ascending });
+          }
+          const { data, error } = await query;
+          if (error) throw error;
+          const batch = (data ?? []) as T[];
+          all.push(...batch);
+          if (batch.length < EXPORT_BATCH_SIZE) break;
+        }
+        return all;
+      }
+
+      // Custom field definitions become columns, ordered by creation so they
+      // read in the order they were added (City, Qualification, ...).
+      const customFields = await fetchAll<CustomField>('custom_fields', '*', {
+        column: 'created_at',
+        ascending: true,
+      });
+
+      const [allContacts, contactTags, customValues] = await Promise.all([
+        fetchAll<Contact>('contacts', '*', {
+          column: 'created_at',
+          ascending: false,
+        }),
+        fetchAll<{ contact_id: string; tag_id: string }>(
+          'contact_tags',
+          'contact_id, tag_id'
+        ),
+        fetchAll<{ contact_id: string; custom_field_id: string; value: string | null }>(
+          'contact_custom_values',
+          'contact_id, custom_field_id, value'
+        ),
+      ]);
+
+      // Tag names per contact, resolved through the already-loaded tag map.
+      const tagsByContact: Record<string, string[]> = {};
+      contactTags.forEach((ct) => {
+        const tag = tagsMap[ct.tag_id];
+        if (!tag) return;
+        (tagsByContact[ct.contact_id] ??= []).push(tag.name);
+      });
+
+      // Custom values keyed contact -> field for O(1) lookup per cell.
+      const valuesByContact: Record<string, Record<string, string>> = {};
+      customValues.forEach((cv) => {
+        (valuesByContact[cv.contact_id] ??= {})[cv.custom_field_id] =
+          cv.value ?? '';
+      });
+
+      const header = [
+        'Name',
+        'Phone',
+        'Email',
+        'Company',
+        'Tags',
+        'Created date',
+        ...customFields.map((f) => f.field_name),
+      ];
+
+      const rows = allContacts.map((c) => [
+        c.name ?? '',
+        c.phone ?? '',
+        c.email ?? '',
+        c.company ?? '',
+        (tagsByContact[c.id] ?? []).join('; '),
+        c.created_at ? new Date(c.created_at).toISOString().slice(0, 10) : '',
+        ...customFields.map((f) => valuesByContact[c.id]?.[f.id] ?? ''),
+      ]);
+
+      const today = new Date().toISOString().slice(0, 10);
+      downloadBlob(`contacts-export-${today}.csv`, toCsv([header, ...rows]));
+      toast.success(
+        `Exported ${allContacts.length} contact${allContacts.length === 1 ? '' : 's'}`
+      );
+    } catch {
+      toast.error('Failed to export contacts');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const hasNext = page < totalPages - 1;
   const hasPrev = page > 0;
@@ -368,6 +501,19 @@ export default function ContactsPage() {
             <Upload className="size-4" />
             Import
           </GatedButton>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={exporting}
+            className="border-border text-muted-foreground hover:bg-muted"
+          >
+            {exporting ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Download className="size-4" />
+            )}
+            Export
+          </Button>
           <GatedButton
             canAct={canEdit}
             gateReason="add or import contacts"
