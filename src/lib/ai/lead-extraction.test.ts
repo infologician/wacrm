@@ -72,7 +72,7 @@ describe('extractLeadDetails — OpenAI', () => {
     })
   })
 
-  it('parses the 5 custom-field extensions', async () => {
+  it('parses the custom-field extensions', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -86,6 +86,7 @@ describe('extractLeadDetails — OpenAI', () => {
                   careerGoal: 'Become a data scientist',
                   interestedInCall: 'Yes',
                   preferredCallTime: 'Weekday mornings',
+                  interest: 'Interested',
                 }),
               },
             },
@@ -105,7 +106,36 @@ describe('extractLeadDetails — OpenAI', () => {
       careerGoal: 'Become a data scientist',
       interestedInCall: 'Yes',
       preferredCallTime: 'Weekday mornings',
+      interest: 'Interested',
     })
+  })
+
+  it('canonicalises a valid interest value and drops an out-of-vocabulary one', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        okResponse({
+          choices: [{ message: { content: JSON.stringify({ interest: 'not interested' }) } }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        okResponse({
+          choices: [{ message: { content: JSON.stringify({ interest: 'very keen' }) } }],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const canonical = await extractLeadDetails({
+      config: config(),
+      messages: [{ role: 'user', content: 'nah' }],
+    })
+    expect(canonical).toEqual({ interest: 'Not interested' })
+
+    const invalid = await extractLeadDetails({
+      config: config(),
+      messages: [{ role: 'user', content: 'maybe someday' }],
+    })
+    expect(invalid).toBeNull()
   })
 
   it('requests JSON mode', async () => {
@@ -192,7 +222,7 @@ describe('extractLeadDetails — Anthropic', () => {
     expect(res).toEqual({ name: 'Jane Doe', company: 'Acme' })
   })
 
-  it('parses the 5 custom-field extensions from the tool input', async () => {
+  it('parses the custom-field extensions from the tool input', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -207,6 +237,7 @@ describe('extractLeadDetails — Anthropic', () => {
                 careerGoal: 'Become a data scientist',
                 interestedInCall: 'Yes',
                 preferredCallTime: 'Weekday mornings',
+                interest: 'Interested',
               },
             },
           ],
@@ -225,10 +256,11 @@ describe('extractLeadDetails — Anthropic', () => {
       careerGoal: 'Become a data scientist',
       interestedInCall: 'Yes',
       preferredCallTime: 'Weekday mornings',
+      interest: 'Interested',
     })
   })
 
-  it('declares the 5 custom fields on the forced tool schema', async () => {
+  it('declares the custom fields on the forced tool schema, with an enum on interest', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       okResponse({
         content: [{ type: 'tool_use', name: 'record_lead_details', input: {} }],
@@ -250,8 +282,14 @@ describe('extractLeadDetails — Anthropic', () => {
         'careerGoal',
         'interestedInCall',
         'preferredCallTime',
+        'interest',
       ]),
     )
+    expect(properties.interest.enum).toEqual([
+      'Interested',
+      'Not sure',
+      'Not interested',
+    ])
   })
 
   it('forces the tool call via tool_choice', async () => {

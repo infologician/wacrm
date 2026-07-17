@@ -1,5 +1,5 @@
 import { AiError, type ChatMessage } from '../types'
-import { MAX_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS } from '../defaults'
+import { MAX_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS, INTEREST_VALUES } from '../defaults'
 import {
   mergeConsecutive,
   providerHttpError,
@@ -63,6 +63,12 @@ const LEAD_DETAILS_TOOL = {
         type: 'string',
         description:
           'The day/time window the customer says they prefer to be called',
+      },
+      interest: {
+        type: 'string',
+        enum: [...INTEREST_VALUES],
+        description:
+          "The customer's overall interest in the offering — only when clearly expressed",
       },
     },
   },

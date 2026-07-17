@@ -159,7 +159,7 @@ export async function dispatchInboundToAiReply(
 /** LeadDetails key -> the exact account-facing custom field name it maps
  *  to. The single source of truth tying extraction output to CRM fields. */
 const CUSTOM_FIELD_NAME_BY_KEY: Record<
-  'city' | 'qualification' | 'careerGoal' | 'interestedInCall' | 'preferredCallTime',
+  'city' | 'qualification' | 'careerGoal' | 'interestedInCall' | 'preferredCallTime' | 'interest',
   string
 > = {
   city: 'City',
@@ -167,13 +167,14 @@ const CUSTOM_FIELD_NAME_BY_KEY: Record<
   careerGoal: 'Career Goal',
   interestedInCall: 'Interested in Call',
   preferredCallTime: 'Preferred Call Time',
+  interest: 'Interest',
 }
 const CUSTOM_FIELD_NAMES = Object.values(CUSTOM_FIELD_NAME_BY_KEY)
 
 /**
  * Fill in whatever `contacts` fields (name/email/company) and custom
  * fields (City, Qualification, Career Goal, Interested in Call, Preferred
- * Call Time) are still empty, from the model's best-effort read of the
+ * Call Time, Interest) are still empty, from the model's best-effort read of the
  * transcript, and log a short summary note if one was found. Never
  * overwrites data already present. Skips the LLM call entirely only once
  * every one of those fields already has a value.

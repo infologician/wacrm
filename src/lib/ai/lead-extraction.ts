@@ -1,5 +1,5 @@
 import type { AiConfig, ChatMessage, LeadDetails } from './types'
-import { LEAD_EXTRACTION_SYSTEM_PROMPT, aiRequestTimeoutMs } from './defaults'
+import { LEAD_EXTRACTION_SYSTEM_PROMPT, INTEREST_VALUES, aiRequestTimeoutMs } from './defaults'
 import { extractLeadOpenAi } from './providers/openai'
 import { extractLeadAnthropic } from './providers/anthropic'
 
@@ -63,6 +63,15 @@ function parseLeadDetails(raw: string): LeadDetails | null {
   const clean = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
 
+  // The interest field is a controlled vocabulary — canonicalise to one of
+  // the three allowed values (case-insensitively) and drop anything else so
+  // a stray free-text answer never lands in the "Interest" custom field.
+  const cleanInterest = (v: unknown): string | undefined => {
+    const s = clean(v)
+    if (!s) return undefined
+    return INTEREST_VALUES.find((allowed) => allowed.toLowerCase() === s.toLowerCase())
+  }
+
   const record = obj as Record<string, unknown>
   const details: LeadDetails = {
     name: clean(record.name),
@@ -74,6 +83,7 @@ function parseLeadDetails(raw: string): LeadDetails | null {
     careerGoal: clean(record.careerGoal),
     interestedInCall: clean(record.interestedInCall),
     preferredCallTime: clean(record.preferredCallTime),
+    interest: cleanInterest(record.interest),
   }
 
   const hasAny = Object.values(details).some((v) => v !== undefined)
