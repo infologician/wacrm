@@ -31,9 +31,10 @@ const ALL_CUSTOM_FIELD_NAMES = [
   'Career Goal',
   'Interested in Call',
   'Preferred Call Time',
+  'Interest',
 ]
 
-/** Fixture: all 5 custom fields already defined and already filled. */
+/** Fixture: all custom fields already defined and already filled. */
 function fullyFilledCustomFields() {
   const fields = ALL_CUSTOM_FIELD_NAMES.map((field_name, i) => ({
     id: `cf-${i + 1}`,
@@ -358,6 +359,22 @@ describe('dispatchInboundToAiReply — custom field extraction', () => {
       expect.arrayContaining([
         expect.objectContaining({ contact_id: 'contact-1', value: 'Austin' }),
         expect.objectContaining({ contact_id: 'contact-1', value: 'Mornings' }),
+      ]),
+    )
+  })
+
+  it('maps the extracted interest level to the "Interest" custom field', async () => {
+    h.extractLeadDetails.mockResolvedValue({ interest: 'Interested' })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.state.customFieldInserts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field_name: 'Interest' }),
+      ]),
+    )
+    expect(h.state.customValueUpserts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contact_id: 'contact-1', value: 'Interested' }),
       ]),
     )
   })

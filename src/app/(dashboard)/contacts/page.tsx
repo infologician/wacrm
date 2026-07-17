@@ -64,8 +64,15 @@ const PAGE_SIZE = 25;
 // by the CSV export page through the result set in batches of this size.
 const EXPORT_BATCH_SIZE = 1000;
 
+// Custom fields surfaced as dedicated columns in the contacts table, in
+// display order. Matched by exact `field_name`; any that don't exist for the
+// account simply render as em dashes.
+const LIST_CUSTOM_FIELDS = ['City', 'Career Goal', 'Interest', 'Lead Status'];
+
 interface ContactWithTags extends Contact {
   tags?: Tag[];
+  /** Values for the LIST_CUSTOM_FIELDS columns, keyed by field name. */
+  customValues?: Record<string, string>;
 }
 
 /**
@@ -127,6 +134,12 @@ export default function ContactsPage() {
   // All tags for display
   const [tagsMap, setTagsMap] = useState<Record<string, Tag>>({});
 
+  // custom_field_id -> field_name for the LIST_CUSTOM_FIELDS columns. Loaded
+  // once; drives both the per-page value fetch and the column rendering.
+  const [listFieldNameById, setListFieldNameById] = useState<
+    Record<string, string>
+  >({});
+
   // Guards against out-of-order fetch responses: each fetchContacts run
   // claims a sequence number and only the latest is allowed to commit its
   // results. Without this, rapidly toggling tag filters could let a slower
@@ -145,6 +158,18 @@ export default function ContactsPage() {
         const pruned = prev.filter((id) => map[id]);
         return pruned.length === prev.length ? prev : pruned;
       });
+    }
+  }, [supabase]);
+
+  const fetchListCustomFields = useCallback(async () => {
+    const { data } = await supabase
+      .from('custom_fields')
+      .select('id, field_name')
+      .in('field_name', LIST_CUSTOM_FIELDS);
+    if (data) {
+      const map: Record<string, string> = {};
+      data.forEach((f) => (map[f.id] = f.field_name));
+      setListFieldNameById(map);
     }
   }, [supabase]);
 
@@ -214,12 +239,26 @@ export default function ContactsPage() {
       return;
     }
 
-    // Fetch tags for these contacts
+    // Fetch tags + custom-field values for these contacts in parallel.
     const contactIds = contactRows.map((c) => c.id);
-    const { data: contactTags } = await supabase
-      .from('contact_tags')
-      .select('contact_id, tag_id')
-      .in('contact_id', contactIds);
+    const listFieldIds = Object.keys(listFieldNameById);
+    const [{ data: contactTags }, { data: customValues }] = await Promise.all([
+      supabase
+        .from('contact_tags')
+        .select('contact_id, tag_id')
+        .in('contact_id', contactIds),
+      listFieldIds.length > 0
+        ? supabase
+            .from('contact_custom_values')
+            .select('contact_id, custom_field_id, value')
+            .in('contact_id', contactIds)
+            .in('custom_field_id', listFieldIds)
+        : Promise.resolve({ data: [] as {
+            contact_id: string;
+            custom_field_id: string;
+            value: string | null;
+          }[] }),
+    ]);
     if (seq !== fetchSeq.current) return; // superseded by a newer fetch
 
     const tagsByContact: Record<string, string[]> = {};
@@ -228,16 +267,27 @@ export default function ContactsPage() {
       tagsByContact[ct.contact_id].push(ct.tag_id);
     });
 
+    // contact_id -> { fieldName: value } for the LIST_CUSTOM_FIELDS columns.
+    const valuesByContact: Record<string, Record<string, string>> = {};
+    customValues?.forEach((cv) => {
+      const fieldName = listFieldNameById[cv.custom_field_id];
+      if (!fieldName) return;
+      if (typeof cv.value === 'string' && cv.value.trim()) {
+        (valuesByContact[cv.contact_id] ??= {})[fieldName] = cv.value;
+      }
+    });
+
     const enriched: ContactWithTags[] = contactRows.map((c) => ({
       ...c,
       tags: (tagsByContact[c.id] ?? [])
         .map((tid) => tagsMap[tid])
         .filter(Boolean),
+      customValues: valuesByContact[c.id] ?? {},
     }));
 
     setContacts(enriched);
     setLoading(false);
-  }, [supabase, page, search, selectedTagIds, tagsMap]);
+  }, [supabase, page, search, selectedTagIds, tagsMap, listFieldNameById]);
 
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (Supabase await), not
@@ -247,6 +297,11 @@ export default function ContactsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTags();
   }, [fetchTags]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchListCustomFields();
+  }, [fetchListCustomFields]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -673,7 +728,7 @@ export default function ContactsPage() {
       )}
 
       {/* Table */}
-      <div className="rounded-lg border border-border overflow-hidden">
+      <div className="rounded-lg border border-border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="border-border hover:bg-transparent">
@@ -690,6 +745,10 @@ export default function ContactsPage() {
               <TableHead className="text-muted-foreground">Phone</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">Email</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">Company</TableHead>
+              <TableHead className="text-muted-foreground whitespace-nowrap">City</TableHead>
+              <TableHead className="text-muted-foreground whitespace-nowrap">Career Goal</TableHead>
+              <TableHead className="text-muted-foreground whitespace-nowrap">Interest</TableHead>
+              <TableHead className="text-muted-foreground whitespace-nowrap">Lead Status</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">Tags</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">Created</TableHead>
               <TableHead className="text-muted-foreground w-12" />
@@ -698,7 +757,7 @@ export default function ContactsPage() {
           <TableBody>
             {loading ? (
               <TableRow className="border-border">
-                <TableCell colSpan={8} className="text-center py-12">
+                <TableCell colSpan={12} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="size-6 animate-spin text-primary" />
                     <p className="text-sm text-muted-foreground">Loading contacts...</p>
@@ -707,7 +766,7 @@ export default function ContactsPage() {
               </TableRow>
             ) : contacts.length === 0 ? (
               <TableRow className="border-border">
-                <TableCell colSpan={8} className="text-center py-12">
+                <TableCell colSpan={12} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Users className="size-8 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
@@ -757,6 +816,16 @@ export default function ContactsPage() {
                   <TableCell className="text-muted-foreground hidden lg:table-cell text-sm">
                     {contact.company || <span className="text-muted-foreground">-</span>}
                   </TableCell>
+                  {LIST_CUSTOM_FIELDS.map((fieldName) => (
+                    <TableCell
+                      key={fieldName}
+                      className="text-muted-foreground text-sm whitespace-nowrap"
+                    >
+                      {contact.customValues?.[fieldName] || (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  ))}
                   <TableCell className="hidden md:table-cell">
                     <div className="flex flex-wrap gap-1">
                       {contact.tags && contact.tags.length > 0 ? (

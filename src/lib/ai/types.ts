@@ -64,6 +64,9 @@ export interface LeadDetails {
   interestedInCall?: string
   /** Day/time window the customer says they prefer to be called. */
   preferredCallTime?: string
+  /** The customer's interest level in the offering. Constrained to one of
+   *  "Interested", "Not sure", or "Not interested". */
+  interest?: string
 }
 
 /**
