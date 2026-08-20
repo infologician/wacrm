@@ -19,6 +19,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
+import { LeadStatusSelect } from "@/components/contacts/lead-status-select";
+import type { LeadStatus } from "@/lib/leads/status";
+import { useCan } from "@/hooks/use-can";
+import { Sparkles } from "lucide-react";
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -26,7 +30,17 @@ interface ContactSidebarProps {
 
 export function ContactSidebar({ contact }: ContactSidebarProps) {
   const { accountId } = useAuth();
+  const canEdit = useCan("send-messages");
   const [copied, setCopied] = useState(false);
+  // Local mirror of the lead status so the override reflects instantly
+  // (the parent doesn't re-push the contact on every change).
+  const [leadStatus, setLeadStatus] = useState<LeadStatus>(
+    (contact?.lead_status as LeadStatus) ?? "new",
+  );
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLeadStatus((contact?.lead_status as LeadStatus) ?? "new");
+  }, [contact?.id, contact?.lead_status]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
@@ -149,6 +163,28 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
             {contact.company && (
               <p className="text-xs text-muted-foreground">{contact.company}</p>
             )}
+          </div>
+
+          {/* Lead status */}
+          <div className="mt-4">
+            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <Sparkles className="h-3 w-3" />
+              Lead status
+            </div>
+            <div className="mt-2">
+              <LeadStatusSelect
+                contactId={contact.id}
+                value={leadStatus}
+                canEdit={canEdit}
+                onChanged={setLeadStatus}
+                className="w-full justify-between"
+              />
+              {contact.lead_status_reason && (
+                <p className="mt-1.5 px-1 text-[11px] leading-snug text-muted-foreground">
+                  {contact.lead_status_reason}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Phone */}

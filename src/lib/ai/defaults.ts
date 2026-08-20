@@ -72,6 +72,18 @@ export function aiContextMessageLimit(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_CONTEXT_MESSAGE_LIMIT
 }
 
+/** Default inbound-hook debounce for the lead-status classifier (2 min):
+ *  a rapid burst of inbound messages triggers at most one classify, and
+ *  the cron sweep re-reads once the thread settles. */
+const DEFAULT_LEAD_CLASSIFY_DEBOUNCE_MS = 120_000
+
+/** Debounce window (ms) for lead-status classification on the inbound
+ *  path. Override with `LEAD_CLASSIFY_DEBOUNCE_MS`. */
+export function leadClassifyInboundDebounceMs(): number {
+  const raw = Number(process.env.LEAD_CLASSIFY_DEBOUNCE_MS)
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : DEFAULT_LEAD_CLASSIFY_DEBOUNCE_MS
+}
+
 /**
  * Build the system prompt shared by draft + auto-reply. The account's
  * own `system_prompt` (business context / persona / tone) is appended

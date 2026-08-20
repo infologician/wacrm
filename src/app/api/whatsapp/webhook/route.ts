@@ -8,6 +8,8 @@ import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import { classifyLead } from '@/lib/ai/lead-status'
+import { leadClassifyInboundDebounceMs } from '@/lib/ai/defaults'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   handleTemplateWebhookChange,
@@ -798,6 +800,22 @@ async function processMessage(
       configOwnerUserId,
     })
   }
+
+  // Smart lead-status reader (internal / back-office). Debounced re-read
+  // of this contact's lead status from the conversation, using the
+  // account's own AI key. Entirely separate from the customer-facing
+  // agent — it never sends a message and `classifyLead` owns its
+  // try/catch and never throws. The debounce collapses a burst of
+  // inbound messages to one call; the settle-based cron sweep backstops
+  // it (and handles the no-reply case). Awaited inside `after()` for the
+  // same detached-promise reason as the dispatches around it.
+  await classifyLead(supabaseAdmin(), {
+    accountId,
+    conversationId: conversation.id,
+    contactId: contactRecord.id,
+    trigger: 'inbound',
+    minIntervalMs: leadClassifyInboundDebounceMs(),
+  })
 
   // message.received webhook (public API). Awaited — not fire-and-forget
   // — because we're inside the route's `after()` block, which only keeps

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { LEAD_STATUS_VALUES, type LeadStatus } from '@/lib/leads/status'
 import {
   daysAgoStart,
   DOW_SHORT_MON_FIRST,
@@ -261,6 +262,32 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
     thisWeekAvg: avg(thisWeekMins),
     lastWeekAvg: avg(lastWeekMins),
   }
+}
+
+// --- 6. Leads by status ------------------------------------------------
+
+export type LeadStatusCounts = Record<LeadStatus, number>
+
+/**
+ * Count contacts per lead status for the "Leads by status" widget. One
+ * head-count per status in parallel — RLS scopes each to the signed-in
+ * account, and the (account_id, lead_status) index (migration 031) keeps
+ * every count a cheap index scan.
+ */
+export async function loadLeadStatusCounts(db: DB): Promise<LeadStatusCounts> {
+  const results = await Promise.all(
+    LEAD_STATUS_VALUES.map((status) =>
+      db
+        .from('contacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('lead_status', status),
+    ),
+  )
+  const counts = {} as LeadStatusCounts
+  LEAD_STATUS_VALUES.forEach((status, i) => {
+    counts[status] = results[i].count ?? 0
+  })
+  return counts
 }
 
 // --- 5. Activity feed --------------------------------------------------

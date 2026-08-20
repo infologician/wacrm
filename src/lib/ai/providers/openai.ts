@@ -58,6 +58,16 @@ export async function generateOpenAi(args: ProviderArgs): Promise<string> {
 }
 
 /**
+ * Call OpenAI's Chat Completions endpoint in JSON mode to classify a
+ * conversation's lead status. Returns the raw JSON text (parsed by
+ * `classifyLead`). Same JSON-mode mechanism as `extractLeadOpenAi`; the
+ * lead-status system prompt drives the output shape.
+ */
+export async function classifyLeadStatusOpenAi(args: ProviderArgs): Promise<string> {
+  return extractLeadOpenAi(args)
+}
+
+/**
  * Call OpenAI's Chat Completions endpoint in JSON mode to pull structured
  * lead fields out of a conversation. Returns the raw JSON text (parsed by
  * `extractLeadDetails`).
