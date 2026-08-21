@@ -54,6 +54,9 @@ import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
+import { LeadStatusBadge } from '@/components/contacts/lead-status-badge';
+import { LeadStatusSelect } from '@/components/contacts/lead-status-select';
+import { LEAD_STATUS_LIST, type LeadStatus } from '@/lib/leads/status';
 import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -66,8 +69,9 @@ const EXPORT_BATCH_SIZE = 1000;
 
 // Custom fields surfaced as dedicated columns in the contacts table, in
 // display order. Matched by exact `field_name`; any that don't exist for the
-// account simply render as em dashes.
-const LIST_CUSTOM_FIELDS = ['City', 'Career Goal', 'Interest', 'Lead Status'];
+// account simply render as em dashes. (Lead status is a native contact
+// column now — see the dedicated badge column below — not a custom field.)
+const LIST_CUSTOM_FIELDS = ['City', 'Career Goal', 'Interest'];
 
 interface ContactWithTags extends Contact {
   tags?: Tag[];
@@ -113,6 +117,8 @@ export default function ContactsPage() {
   const [totalCount, setTotalCount] = useState(0);
   // Tag filter — contacts shown must have ANY of these tags (OR).
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  // Lead-status filter — contacts shown must have ANY of these statuses.
+  const [selectedStatuses, setSelectedStatuses] = useState<LeadStatus[]>([]);
 
   // Modals
   const [formOpen, setFormOpen] = useState(false);
@@ -207,6 +213,14 @@ export default function ContactsPage() {
       }
       const rows = (data ?? []) as { contact: Contact; total_count: number }[];
       contactRows = rows.map((r) => r.contact);
+      // The tag RPC predates the lead-status filter, so apply that filter
+      // client-side over the returned page. (Combining both filters is a
+      // rare combination; the page-scoped filter keeps it simple.)
+      if (selectedStatuses.length > 0) {
+        contactRows = contactRows.filter((c) =>
+          selectedStatuses.includes((c.lead_status ?? 'new') as LeadStatus),
+        );
+      }
       count = rows.length > 0 ? Number(rows[0].total_count) : 0;
     } else {
       let query = supabase
@@ -218,6 +232,10 @@ export default function ContactsPage() {
       if (term) {
         const like = `%${term}%`;
         query = query.or(`name.ilike.${like},phone.ilike.${like},email.ilike.${like}`);
+      }
+
+      if (selectedStatuses.length > 0) {
+        query = query.in('lead_status', selectedStatuses);
       }
 
       const { data, count: exactCount, error } = await query;
@@ -287,7 +305,7 @@ export default function ContactsPage() {
 
     setContacts(enriched);
     setLoading(false);
-  }, [supabase, page, search, selectedTagIds, tagsMap, listFieldNameById]);
+  }, [supabase, page, search, selectedTagIds, selectedStatuses, tagsMap, listFieldNameById]);
 
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (Supabase await), not
@@ -509,7 +527,10 @@ export default function ContactsPage() {
   const allTags = Object.values(tagsMap).sort((a, b) =>
     a.name.localeCompare(b.name)
   );
-  const hasActiveFilters = search.trim().length > 0 || selectedTagIds.length > 0;
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    selectedTagIds.length > 0 ||
+    selectedStatuses.length > 0;
 
   function toggleTagFilter(tagId: string) {
     setSelectedTagIds((prev) =>
@@ -523,6 +544,32 @@ export default function ContactsPage() {
   function clearTagFilters() {
     setSelectedTagIds([]);
     setPage(0);
+  }
+
+  function toggleStatusFilter(status: LeadStatus) {
+    setSelectedStatuses((prev) =>
+      prev.includes(status)
+        ? prev.filter((s) => s !== status)
+        : [...prev, status]
+    );
+    setPage(0);
+  }
+
+  function clearStatusFilters() {
+    setSelectedStatuses([]);
+    setPage(0);
+  }
+
+  // Patch a single contact's lead_status in local state after a human
+  // override, so the badge updates without a full refetch.
+  function applyLocalStatus(contactId: string, status: LeadStatus) {
+    setContacts((prev) =>
+      prev.map((c) =>
+        c.id === contactId
+          ? { ...c, lead_status: status, lead_status_source: 'manual' }
+          : c
+      )
+    );
   }
 
   return (
@@ -657,6 +704,60 @@ export default function ContactsPage() {
                   ))}
                 </div>
               )}
+            </PopoverContent>
+          </Popover>
+
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  className="border-border text-muted-foreground hover:bg-muted shrink-0"
+                />
+              }
+            >
+              <Filter className="size-4" />
+              Lead status
+              {selectedStatuses.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+                  {selectedStatuses.length}
+                </span>
+              )}
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 p-0">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                <span className="text-sm font-medium text-popover-foreground">
+                  Filter by status
+                </span>
+                {selectedStatuses.length > 0 && (
+                  <button
+                    onClick={clearStatusFilters}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+              <div className="py-1">
+                {LEAD_STATUS_LIST.map((meta) => (
+                  <label
+                    key={meta.value}
+                    className="flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-muted/50"
+                  >
+                    <Checkbox
+                      checked={selectedStatuses.includes(meta.value)}
+                      onCheckedChange={() => toggleStatusFilter(meta.value)}
+                      aria-label={`Filter by ${meta.label}`}
+                    />
+                    <span
+                      className={`size-2.5 shrink-0 rounded-full ${meta.dotClass}`}
+                    />
+                    <span className="text-sm text-popover-foreground truncate">
+                      {meta.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -826,6 +927,27 @@ export default function ContactsPage() {
                       )}
                     </TableCell>
                   ))}
+                  {/* Lead status — native column. Agents can override
+                      inline; the AI classifier won't clobber a manual set
+                      unless the signal is strong. */}
+                  <TableCell
+                    className="whitespace-nowrap"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {canEdit ? (
+                      <LeadStatusSelect
+                        contactId={contact.id}
+                        value={contact.lead_status}
+                        canEdit={canEdit}
+                        onChanged={(status) => applyLocalStatus(contact.id, status)}
+                      />
+                    ) : (
+                      <LeadStatusBadge
+                        status={contact.lead_status}
+                        reason={contact.lead_status_reason}
+                      />
+                    )}
+                  </TableCell>
                   <TableCell className="hidden md:table-cell">
                     <div className="flex flex-wrap gap-1">
                       {contact.tags && contact.tags.length > 0 ? (

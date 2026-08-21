@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import { LeadStatusBadge } from "@/components/contacts/lead-status-badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -841,6 +842,12 @@ export function MessageThread({
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
             <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
           </div>
+          {/* Lead-status badge — the smart reader's read on this contact. */}
+          <LeadStatusBadge
+            status={contact.lead_status}
+            reason={contact.lead_status_reason}
+            className="ml-1 hidden sm:inline-flex sm:ml-2"
+          />
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
           <Badge

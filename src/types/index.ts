@@ -1,4 +1,5 @@
 import type { AccountRole } from "@/lib/auth/roles";
+import type { LeadStatus, LeadStatusSource } from "@/lib/leads/status";
 
 export interface Profile {
   id: string;
@@ -103,6 +104,21 @@ export interface Contact {
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
    *  Inbox conversation list, for tag filtering). Absent otherwise. */
   tags?: Tag[];
+  // ---- Smart lead-status reader (migration 031) ------------------
+  /** AI-set (or human-overridden) lead status. Defaults to 'new'. */
+  lead_status?: LeadStatus;
+  /** Short (<=140 char) rationale for the current status. */
+  lead_status_reason?: string | null;
+  /** Who set the status: 'ai' (classifier) or 'manual' (human override). */
+  lead_status_source?: LeadStatusSource;
+  /** When the status last changed. */
+  lead_status_updated_at?: string | null;
+  /** When the classifier last ran for this contact (idempotency key). */
+  last_classified_at?: string | null;
+  /** Structured attributes the classifier fills in (blanks only). */
+  interest_track?: string | null;
+  experience_level?: string | null;
+  best_callback_time?: string | null;
 }
 
 export interface Tag {

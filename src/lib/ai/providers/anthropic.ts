@@ -1,5 +1,6 @@
 import { AiError, type ChatMessage } from '../types'
 import { MAX_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS, INTEREST_VALUES } from '../defaults'
+import { LEAD_STATUS_VALUES } from '@/lib/leads/status'
 import {
   mergeConsecutive,
   providerHttpError,
@@ -177,6 +178,92 @@ export async function extractLeadAnthropic(args: ProviderArgs): Promise<string> 
   const data = (await res.json().catch(() => null)) as AnthropicResponse | null
   const toolUse = data?.content?.find(
     (b) => b.type === 'tool_use' && b.name === LEAD_DETAILS_TOOL_NAME,
+  )
+  if (!toolUse || typeof toolUse.input !== 'object' || toolUse.input === null) {
+    throw new AiError('Anthropic returned an empty response.', {
+      code: 'empty_response',
+    })
+  }
+  return JSON.stringify(toolUse.input)
+}
+
+const LEAD_STATUS_TOOL_NAME = 'record_lead_status'
+
+/** Forces structured output for the lead-status classifier: a single
+ *  tool whose shape matches `LeadClassification`. */
+const LEAD_STATUS_TOOL = {
+  name: LEAD_STATUS_TOOL_NAME,
+  description:
+    'Record the lead status and structured attributes read from the conversation transcript.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'string',
+        enum: [...LEAD_STATUS_VALUES],
+        description: 'The single best-fitting lead status for this conversation',
+      },
+      reason: {
+        type: 'string',
+        description: 'A concise (<=140 chars) justification for the chosen status',
+      },
+      name: { type: 'string', description: "The customer's name, if clearly stated" },
+      city: { type: 'string', description: 'The city the customer says they are in' },
+      interest_track: {
+        type: 'string',
+        description: 'The program / course / product track the customer is interested in',
+      },
+      experience_level: {
+        type: 'string',
+        description: "The customer's stated experience or skill level",
+      },
+      best_callback_time: {
+        type: 'string',
+        description: 'The day/time window the customer says they prefer to be called',
+      },
+    },
+    required: ['status', 'reason'],
+  },
+}
+
+/**
+ * Call Anthropic's Messages endpoint with a forced tool call to classify
+ * a conversation's lead status. Returns the tool input as a JSON string
+ * (parsed by `classifyLead`).
+ */
+export async function classifyLeadStatusAnthropic(args: ProviderArgs): Promise<string> {
+  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+
+  let res: Response
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        system: systemPrompt,
+        max_tokens: MAX_EXTRACTION_OUTPUT_TOKENS,
+        messages: normalizeForAnthropic(messages),
+        tools: [LEAD_STATUS_TOOL],
+        tool_choice: { type: 'tool', name: LEAD_STATUS_TOOL_NAME },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    throw toNetworkError(err)
+  }
+
+  if (!res.ok) {
+    throw await providerHttpError('Anthropic', res)
+  }
+
+  const data = (await res.json().catch(() => null)) as AnthropicResponse | null
+  const toolUse = data?.content?.find(
+    (b) => b.type === 'tool_use' && b.name === LEAD_STATUS_TOOL_NAME,
   )
   if (!toolUse || typeof toolUse.input !== 'object' || toolUse.input === null) {
     throw new AiError('Anthropic returned an empty response.', {

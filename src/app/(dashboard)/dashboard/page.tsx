@@ -14,9 +14,11 @@ import {
 import {
   loadActivity,
   loadConversationsSeries,
+  loadLeadStatusCounts,
   loadMetrics,
   loadPipelineDonut,
   loadResponseTime,
+  type LeadStatusCounts,
 } from '@/lib/dashboard/queries'
 import type {
   ActivityItem,
@@ -33,6 +35,7 @@ import { ConversationsChart } from '@/components/dashboard/conversations-chart'
 import { PipelineDonut } from '@/components/dashboard/pipeline-donut'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
+import { LeadsByStatus } from '@/components/dashboard/leads-by-status'
 
 type RangeDays = 7 | 30 | 90
 
@@ -60,6 +63,9 @@ export default function DashboardPage() {
 
   const [activity, setActivity] = useState<ActivityItem[] | null>(null)
   const [activityLoading, setActivityLoading] = useState(true)
+
+  const [leadCounts, setLeadCounts] = useState<LeadStatusCounts | null>(null)
+  const [leadCountsLoading, setLeadCountsLoading] = useState(true)
 
   const loadAll = useCallback(() => {
     const db = createClient()
@@ -94,6 +100,11 @@ export default function DashboardPage() {
       .then((a) => setActivity(a))
       .catch((err) => console.error('[dashboard] activity failed:', err))
       .finally(() => setActivityLoading(false))
+
+    void loadLeadStatusCounts(db)
+      .then((c) => setLeadCounts(c))
+      .catch((err) => console.error('[dashboard] lead counts failed:', err))
+      .finally(() => setLeadCountsLoading(false))
   }, [])
 
   useEffect(() => {
@@ -178,6 +189,9 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {/* Leads by status */}
+      <LeadsByStatus counts={leadCounts} loading={leadCountsLoading} />
 
       {/* Quick actions */}
       <QuickActions />
