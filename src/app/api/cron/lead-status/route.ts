@@ -107,6 +107,12 @@ export async function GET(request: Request) {
   let classified = 0
   let noReply = 0
   let skipped = 0
+  // Why each conversation was left alone, tallied by reason. Without this
+  // a run that touches nothing is indistinguishable from a run where the
+  // provider call is failing on every conversation — both report
+  // `skipped: N` and nothing else. Reasons are a fixed internal
+  // vocabulary from `classifyLead`, never customer data.
+  const reasons: Record<string, number> = {}
   for (const conv of candidates) {
     const result = await classifyLead(db, {
       accountId: conv.account_id,
@@ -116,6 +122,8 @@ export async function GET(request: Request) {
     })
     if (!result.applied) {
       skipped++
+      const why = result.skipped ?? 'unknown'
+      reasons[why] = (reasons[why] ?? 0) + 1
     } else if (result.status === 'no_reply') {
       noReply++
     } else {
@@ -128,5 +136,6 @@ export async function GET(request: Request) {
     classified,
     noReply,
     skipped,
+    reasons,
   })
 }
