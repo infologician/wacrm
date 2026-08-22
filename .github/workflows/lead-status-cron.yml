@@ -1,0 +1,74 @@
+# Runs the two background sweeps the CRM needs.
+#
+# Vercel's Hobby plan rejects any cron more frequent than once a day at
+# deploy time, so vercel.json is not an option here. GitHub Actions runs
+# on any plan and hits the same routes.
+#
+# Requires two repository secrets, matching the Vercel env vars:
+#   CRON_SECRET             -> /api/cron/lead-status
+#   AUTOMATION_CRON_SECRET  -> /api/automations/cron
+#
+# Both routes are idempotent and cheap to no-op, so overlapping or
+# missed runs are harmless.
+
+name: CRM background sweeps
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub's scheduler is best-effort and can lag a
+    # few minutes under load; that is fine for both jobs.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-sweeps
+  cancel-in-progress: false
+
+jobs:
+  lead-status:
+    name: Lead status + no-reply sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call the lead-status sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 120 \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            "https://crm.logician.in/api/cron/lead-status")
+          echo "HTTP ${code}"; cat /tmp/out.json || true; echo
+          if [ "${code}" = "401" ] || [ "${code}" = "403" ]; then
+            echo "::error::Rejected. CRON_SECRET here does not match Vercel, or Vercel was not redeployed after setting it."
+            exit 1
+          fi
+          [ "${code}" -lt 400 ] || { echo "::error::Failed with HTTP ${code}."; exit 1; }
+
+  automations:
+    name: Automations (resumes waiting follow-ups)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call the automations cron
+        env:
+          AUTOMATION_CRON_SECRET: ${{ secrets.AUTOMATION_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUTOMATION_CRON_SECRET}" ]; then
+            echo "::error::AUTOMATION_CRON_SECRET repository secret is not set."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 120 \
+            -H "x-cron-secret: ${AUTOMATION_CRON_SECRET}" \
+            "https://crm.logician.in/api/automations/cron")
+          echo "HTTP ${code}"; cat /tmp/out.json || true; echo
+          if [ "${code}" = "401" ] || [ "${code}" = "403" ]; then
+            echo "::error::Rejected. AUTOMATION_CRON_SECRET here does not match Vercel, or Vercel was not redeployed after setting it."
+            exit 1
+          fi
+          [ "${code}" -lt 400 ] || { echo "::error::Failed with HTTP ${code}."; exit 1; }
