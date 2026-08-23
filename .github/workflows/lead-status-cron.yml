@@ -4,9 +4,10 @@
 # deploy time, so vercel.json is not an option here. GitHub Actions runs
 # on any plan and hits the same routes.
 #
-# Requires two repository secrets, matching the Vercel env vars:
-#   CRON_SECRET             -> /api/cron/lead-status
-#   AUTOMATION_CRON_SECRET  -> /api/automations/cron
+# Both jobs authenticate with a single repository secret, CRON_SECRET,
+# matching the Vercel env var of the same name. /api/automations/cron
+# prefers AUTOMATION_CRON_SECRET and falls back to CRON_SECRET, so there
+# is no second secret to set or keep in sync.
 #
 # Both routes are idempotent and cheap to no-op, so overlapping or
 # missed runs are harmless.
@@ -56,19 +57,23 @@ jobs:
     steps:
       - name: Call the automations cron
         env:
-          AUTOMATION_CRON_SECRET: ${{ secrets.AUTOMATION_CRON_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          if [ -z "${AUTOMATION_CRON_SECRET}" ]; then
-            echo "::error::AUTOMATION_CRON_SECRET repository secret is not set."
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set."
             exit 1
           fi
           code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 120 \
-            -H "x-cron-secret: ${AUTOMATION_CRON_SECRET}" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
             "https://crm.logician.in/api/automations/cron")
           echo "HTTP ${code}"; cat /tmp/out.json || true; echo
           if [ "${code}" = "401" ] || [ "${code}" = "403" ]; then
-            echo "::error::Rejected. AUTOMATION_CRON_SECRET here does not match Vercel, or Vercel was not redeployed after setting it."
+            echo "::error::Rejected. CRON_SECRET here does not match Vercel, or Vercel was not redeployed after setting it."
+            exit 1
+          fi
+          if [ "${code}" = "503" ]; then
+            echo "::error::Route says cron not configured. Set CRON_SECRET in Vercel (Production) and redeploy."
             exit 1
           fi
           [ "${code}" -lt 400 ] || { echo "::error::Failed with HTTP ${code}."; exit 1; }
