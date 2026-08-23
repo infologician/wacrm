@@ -8,6 +8,12 @@ import type { AutomationContext } from '@/lib/automations/engine'
  * on a schedule (Vercel Cron / external pinger) — requires a shared
  * secret via the `x-cron-secret` header to match
  * `AUTOMATION_CRON_SECRET`.
+  *
+   * `CRON_SECRET` is accepted as a fallback so one secret covers both
+    * background sweeps. `AUTOMATION_CRON_SECRET` still wins when set, so a
+     * deployment with its own value is unaffected; a deployment that never
+      * set it stops returning 503 forever and reuses the lead-status sweep's
+       * secret instead.
  *
  * The claim step (status = 'running') serves as a simple lock so
  * overlapping invocations don't double-process rows. Best-effort
@@ -15,7 +21,7 @@ import type { AutomationContext } from '@/lib/automations/engine'
  * two-step UPDATE-by-id.
  */
 export async function GET(request: Request) {
-  const expected = process.env.AUTOMATION_CRON_SECRET
+  const expected = process.env.AUTOMATION_CRON_SECRET || process.env.CRON_SECRET
   if (!expected) {
     return NextResponse.json({ error: 'cron not configured' }, { status: 503 })
   }
