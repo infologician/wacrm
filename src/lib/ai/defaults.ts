@@ -110,7 +110,15 @@ export function buildSystemPrompt(args: {
 
   if (mode === 'auto_reply') {
     parts.push(
-      `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — reply with exactly ${HANDOFF_SENTINEL} and nothing else. A human agent will then take over. Prefer handing off over guessing.`,
+      // Handing off costs a real customer a real answer, so the bar is
+      // deliberately high. The old wording ("the request needs information
+      // you do not have … prefer handing off over guessing") fired on
+      // anything off-topic — a customer typing "Give me food" got the
+      // sentinel and therefore silence — which reads as a dead business.
+      // Not knowing something is a reason to say so and point at a human,
+      // not a reason to say nothing.
+      `You are replying automatically with no human in the loop, so the customer only hears back if you reply. Send a reply to every message. If you do not know something, say so plainly and point them to the business's contact details rather than guessing — that is a normal answer, not a handoff. Off-topic, playful, accidental or nonsense messages get a short friendly reply that steers back to what the business does; never ignore them.`,
+      `Reply with exactly ${HANDOFF_SENTINEL} and nothing else ONLY when replying at all would be wrong: the customer appears to be under 18, is in distress or describes harm, is abusive, or is asking you to take payment card / bank / password details. A human agent then takes over. In every other situation, write a reply.`,
     )
   }
 
@@ -121,7 +129,10 @@ export function buildSystemPrompt(args: {
   if (knowledge && knowledge.length > 0) {
     const fallback =
       mode === 'auto_reply'
-        ? `if they don't cover the question, do not guess — reply with exactly ${HANDOFF_SENTINEL} so a human can help`
+        // Same reasoning as above: a gap in the knowledge base is not a
+        // reason to go silent on a customer, it is a reason to be honest
+        // and hand them a way to reach a person.
+        ? "if they don't cover the question, do not guess — say plainly that you'll have the team confirm it and give the business's contact details"
         : "if they don't cover the question, don't guess — say you'll check and follow up"
     parts.push(
       'Knowledge base — excerpts from the business\'s own documentation, retrieved for this question. ' +

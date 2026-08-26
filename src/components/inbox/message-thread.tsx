@@ -821,8 +821,14 @@ export function MessageThread({
     <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+      {/* @container/hdr: the badges below must react to how wide THIS column
+          is, not how wide the browser is. Tailwind's `sm:` is a viewport
+          query — with the contact panel open on a 1280px screen this header
+          is only ~440px wide, so `sm:` was true while the space was phone
+          sized. The shrink-0 badges then overflowed into the Open/Assign
+          controls and visibly overlapped them. */}
+      <div className="@container/hdr flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
           {onBack && (
@@ -846,14 +852,14 @@ export function MessageThread({
           <LeadStatusBadge
             status={contact.lead_status}
             reason={contact.lead_status_reason}
-            className="ml-1 hidden sm:inline-flex sm:ml-2"
+            className="ml-1 hidden shrink @[26rem]/hdr:ml-2 @[26rem]/hdr:inline-flex"
           />
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
           <Badge
             variant="outline"
             className={cn(
-              "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
+              "ml-1 hidden min-w-0 gap-1 border-border text-[10px] @[34rem]/hdr:ml-2 @[34rem]/hdr:inline-flex",
               sessionInfo.expired ? "text-red-400" : "text-primary"
             )}
           >
@@ -862,7 +868,7 @@ export function MessageThread({
           </Badge>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just

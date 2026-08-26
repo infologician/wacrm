@@ -281,12 +281,27 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply and does not send on handoff', async () => {
+  it('stays silent on handoff without sending', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.state.updatePayload).toEqual({ ai_autoreply_disabled: true })
     expect(h.state.rpcCalls).toHaveLength(0)
+  })
+
+  // Regression: a single unanswerable message used to set
+  // ai_autoreply_disabled=true, and nothing in the product could ever set it
+  // back — so one "Give me food" silenced the AI on that thread forever.
+  it('does NOT permanently disable auto-reply for the conversation', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+  })
+
+  it('stays silent when the model returns empty text without a handoff', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
   })
 })
 

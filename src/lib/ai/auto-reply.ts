@@ -103,13 +103,19 @@ export async function dispatchInboundToAiReply(
     })
 
     if (handoff || !text) {
-      // The model can't (or shouldn't) answer — stop auto-replying on
-      // this thread and leave the inbound unanswered so it surfaces in
-      // the inbox for a human. Sticky until an admin re-enables.
-      await db
-        .from('conversations')
-        .update({ ai_autoreply_disabled: true })
-        .eq('id', conversationId)
+      // The model can't (or shouldn't) answer THIS message. Stay silent so
+      // the inbound surfaces in the inbox for a human.
+      //
+      // We deliberately do NOT flip `ai_autoreply_disabled` here any more.
+      // One off-topic message ("Give me food") used to kill the AI on that
+      // thread permanently, and because nothing in the product ever writes
+      // that column back to false, the thread could never recover. Threads
+      // accumulated in a silent state and it read as "the AI stopped
+      // answering".
+      //
+      // Handing off is a per-message decision, so it stays a per-message
+      // effect. A human taking the thread over is expressed by assigning an
+      // agent (checked above), which is reversible from the inbox.
       return
     }
 
