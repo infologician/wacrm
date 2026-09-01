@@ -71,7 +71,7 @@ const EXPORT_BATCH_SIZE = 1000;
 // display order. Matched by exact `field_name`; any that don't exist for the
 // account simply render as em dashes. (Lead status is a native contact
 // column now — see the dedicated badge column below — not a custom field.)
-const LIST_CUSTOM_FIELDS = ['City', 'Career Goal', 'Interest'];
+const LIST_CUSTOM_FIELDS = ['City', 'Career Goal', 'Interest', 'Sales Rep'];
 
 interface ContactWithTags extends Contact {
   tags?: Tag[];
@@ -849,6 +849,7 @@ export default function ContactsPage() {
               <TableHead className="text-muted-foreground whitespace-nowrap">City</TableHead>
               <TableHead className="text-muted-foreground whitespace-nowrap">Career Goal</TableHead>
               <TableHead className="text-muted-foreground whitespace-nowrap">Interest</TableHead>
+              <TableHead className="text-muted-foreground whitespace-nowrap">Sales Rep</TableHead>
               <TableHead className="text-muted-foreground whitespace-nowrap">Lead Status</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">Tags</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">Created</TableHead>

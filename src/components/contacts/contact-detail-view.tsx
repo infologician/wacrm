@@ -89,6 +89,14 @@ export function ContactDetailView({
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [savingCustom, setSavingCustom] = useState(false);
   const [loadingCustom, setLoadingCustom] = useState(false);
+  // custom_field_id -> the distinct values already in use across this
+  // account's contacts, so a text field can offer "pick an existing one or
+  // type a new one" instead of forcing free text every time. Used for
+  // allocation-style fields such as Sales Rep, where consistent spelling
+  // is what makes the contacts list filterable.
+  const [customSuggestions, setCustomSuggestions] = useState<
+    Record<string, string[]>
+  >({});
 
   // Deals tab
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -146,15 +154,37 @@ export function ContactDetailView({
     if (!contactId) return;
     setLoadingCustom(true);
 
-    const [fieldsRes, valuesRes] = await Promise.all([
+    const [fieldsRes, valuesRes, allValuesRes] = await Promise.all([
       supabase.from('custom_fields').select('*').order('field_name'),
       supabase
         .from('contact_custom_values')
         .select('*')
         .eq('contact_id', contactId),
+      // Every value already recorded for this account's custom fields.
+      // RLS scopes this to the caller's account, so it needs no explicit
+      // filter. Best-effort: if it fails the inputs simply stay free text.
+      supabase
+        .from('contact_custom_values')
+        .select('custom_field_id, value')
+        .not('value', 'is', null),
     ]);
 
     if (fieldsRes.data) setCustomFields(fieldsRes.data);
+    if (allValuesRes.data) {
+      const byField: Record<string, Set<string>> = {};
+      allValuesRes.data.forEach((v) => {
+        const raw = typeof v.value === 'string' ? v.value.trim() : '';
+        if (!raw) return;
+        (byField[v.custom_field_id] ??= new Set()).add(raw);
+      });
+      const suggestions: Record<string, string[]> = {};
+      Object.entries(byField).forEach(([fieldId, set]) => {
+        suggestions[fieldId] = [...set].sort((a, b) =>
+          a.localeCompare(b, undefined, { sensitivity: 'base' }),
+        );
+      });
+      setCustomSuggestions(suggestions);
+    }
     if (valuesRes.data) {
       const map: Record<string, string> = {};
       valuesRes.data.forEach((v) => {
@@ -657,24 +687,40 @@ export function ContactDetailView({
                   </p>
                 ) : (
                   <div className="space-y-3">
-                    {customFields.map((field) => (
-                      <div key={field.id} className="space-y-1.5">
-                        <Label className="text-muted-foreground text-xs capitalize">
-                          {field.field_name}
-                        </Label>
-                        <Input
-                          value={customValues[field.id] ?? ''}
-                          onChange={(e) =>
-                            setCustomValues((prev) => ({
-                              ...prev,
-                              [field.id]: e.target.value,
-                            }))
-                          }
-                          placeholder={`Enter ${field.field_name}...`}
-                          className="bg-muted border-border text-foreground h-8 text-sm placeholder:text-muted-foreground"
-                        />
-                      </div>
-                    ))}
+                    {customFields.map((field) => {
+                      const options = customSuggestions[field.id] ?? [];
+                      const listId = `custom-field-options-${field.id}`;
+                      return (
+                        <div key={field.id} className="space-y-1.5">
+                          <Label className="text-muted-foreground text-xs capitalize">
+                            {field.field_name}
+                          </Label>
+                          <Input
+                            value={customValues[field.id] ?? ''}
+                            onChange={(e) =>
+                              setCustomValues((prev) => ({
+                                ...prev,
+                                [field.id]: e.target.value,
+                              }))
+                            }
+                            list={options.length > 0 ? listId : undefined}
+                            placeholder={
+                              options.length > 0
+                                ? `Choose or type a new ${field.field_name}...`
+                                : `Enter ${field.field_name}...`
+                            }
+                            className="bg-muted border-border text-foreground h-8 text-sm placeholder:text-muted-foreground"
+                          />
+                          {options.length > 0 && (
+                            <datalist id={listId}>
+                              {options.map((option) => (
+                                <option key={option} value={option} />
+                              ))}
+                            </datalist>
+                          )}
+                        </div>
+                      );
+                    })}
                     <Button
                       onClick={saveCustomFields}
                       disabled={savingCustom}
