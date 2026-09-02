@@ -156,8 +156,20 @@ export async function classifyLead(
 
     // --- No new content: only the time-based no-reply flip applies. ---
     if (!hasNew) {
+      // Statuses the 24h timer must never overwrite.
+      //
+      // `no_reply` and `not_interested` are terminal: re-stamping them is
+      // pointless. `interested` and `need_time` are different — they are
+      // things the customer actually TOLD us, and going quiet for a day
+      // does not retract them. Letting the timer bury them under
+      // `no_reply` destroyed the single most valuable signal in the CRM:
+      // a warm lead became indistinguishable from someone who never
+      // engaged, so nobody called them. Silence is not a change of mind.
       const alreadyTerminal =
-        row.lead_status === 'no_reply' || row.lead_status === 'not_interested'
+        row.lead_status === 'no_reply' ||
+        row.lead_status === 'not_interested' ||
+        row.lead_status === 'interested' ||
+        row.lead_status === 'need_time'
       if (
         awaitingCustomer &&
         hoursSinceLast >= NO_REPLY_HOURS &&
