@@ -180,6 +180,26 @@ describe('classifyLead — idempotency & no-reply', () => {
     expect(loadAiConfigMock).not.toHaveBeenCalled()
   })
 
+  it.each(['interested', 'need_time'] as const)(
+    'does not bury an AI-set %s status under no_reply after the window',
+    async (status) => {
+      // Going quiet for a day is not a change of mind. These statuses are
+      // things the customer told us; the timer must not overwrite them or
+      // warm leads become indistinguishable from people who never engaged.
+      const oldIso = new Date(Date.now() - (NO_REPLY_HOURS + 5) * 3_600_000).toISOString()
+      const { db, updates } = makeDb({
+        contact: { lead_status: status, lead_status_source: 'ai', last_classified_at: oldIso },
+        lastMsg: { sender_type: 'agent', created_at: oldIso },
+        newCount: 0,
+      })
+
+      const res = await classifyLead(db, BASE)
+      expect(res.applied).toBe(false)
+      expect(res.skipped).toBe('no_new_messages')
+      expect(updates).toHaveLength(0)
+    },
+  )
+
   it('does not flip a manual status to no_reply', async () => {
     const oldIso = new Date(Date.now() - (NO_REPLY_HOURS + 5) * 3_600_000).toISOString()
     const { db, updates } = makeDb({
