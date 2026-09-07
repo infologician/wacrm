@@ -10,10 +10,17 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
  * arrives or the attribution is lost for good.
  *
  * The raw facts are stamped on the contact. One row per ad is kept in
- * `ad_campaigns`, where a human names the campaign once; every lead from that
- * ad reads its name from that single row, so renaming a campaign never means
- * rewriting contact rows.
+ * `ad_campaigns`, and the campaign NAME is resolved once per ad from the Meta
+ * Marketing API, so the CRM shows the same campaign name you see in Ads
+ * Manager. Renaming a campaign updates every lead from that ad through a
+ * database trigger, so contact rows are never rewritten by hand.
+ *
+ * Resolving the name needs META_ADS_ACCESS_TOKEN (a token with `ads_read`).
+ * Without it everything else still works and the ad's headline is shown
+ * instead, so attribution is never blocked on the token being present.
  */
+
+const GRAPH_VERSION = 'v21.0'
 
 export interface WhatsAppReferral {
   source_id?: string
@@ -36,6 +43,34 @@ function admin(): SupabaseClient {
   return _client
 }
 
+/**
+ * Ask Meta what campaign an ad belongs to. Returns null on any failure - a
+ * missing token, a revoked token, a deleted ad - because a readable campaign
+ * name is a nicety and must never cost us the attribution itself.
+ */
+async function fetchCampaignName(adId: string): Promise<string | null> {
+  const token = process.env.META_ADS_ACCESS_TOKEN
+  if (!token) return null
+
+  try {
+    const url =
+      `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(adId)}` +
+      `?fields=campaign{name}&access_token=${encodeURIComponent(token)}`
+
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) {
+      console.error('[referral] campaign lookup failed:', adId, res.status)
+      return null
+    }
+
+    const json = (await res.json()) as { campaign?: { name?: string } }
+    return json?.campaign?.name?.trim() || null
+  } catch (err) {
+    console.error('[referral] campaign lookup error:', adId, err)
+    return null
+  }
+}
+
 export async function captureAdReferral(
   referral: WhatsAppReferral | undefined | null,
   contactId: string,
@@ -52,12 +87,24 @@ export async function captureAdReferral(
 
     const db = admin()
 
-    // One row per ad. `campaign_name` is set by a person in the CRM, so it is
-    // deliberately absent from this payload and can never be clobbered here.
+    // Look the campaign name up once per ad, not once per lead.
+    const { data: existing } = await db
+      .from('ad_campaigns')
+      .select('campaign_name')
+      .eq('ad_id', adId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+
+    const campaignName =
+      existing?.campaign_name?.trim() || (await fetchCampaignName(adId))
+
+    // A name typed by a person in the CRM is never clobbered, because it is
+    // read back above and passed through unchanged.
     const { error: campaignError } = await db.from('ad_campaigns').upsert(
       {
         ad_id: adId,
         account_id: accountId,
+        campaign_name: campaignName,
         ad_headline: headline,
         source_type: sourceType,
         last_seen_at: now,
@@ -69,8 +116,10 @@ export async function captureAdReferral(
       console.error('[referral] ad_campaigns upsert failed:', campaignError)
     }
 
-    // First touch wins: `.is('ad_id', null)` means a lead who later clicks a
-    // second ad stays credited to the ad that originally brought them in.
+    // First touch wins, with one exception: attribution that was *inferred*
+    // from a lead's opening message is a guess, so a confirmed referral from
+    // Meta may replace it. Confirmed attribution is never overwritten, so a
+    // lead who later clicks a second ad stays credited to the first.
     const { error: contactError } = await db
       .from('contacts')
       .update({
@@ -79,9 +128,10 @@ export async function captureAdReferral(
         ad_source_type: sourceType,
         ctwa_clid: clid,
         referral_at: now,
+        ad_attribution_method: 'meta_referral',
       })
       .eq('id', contactId)
-      .is('ad_id', null)
+      .or('ad_id.is.null,ad_attribution_method.eq.inferred_first_message')
     if (contactError) {
       console.error('[referral] contact attribution failed:', contactError)
     }
