@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
+import { captureAdReferral } from '@/lib/whatsapp/referral'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -36,6 +37,16 @@ function supabaseAdmin() {
 }
 
 interface WhatsAppMessage {
+  // Present only on the first message of a conversation started from a
+  // Click-to-WhatsApp ad. Meta never resends it, so it must be captured now.
+  referral?: {
+    source_id?: string
+    source_type?: string
+    source_url?: string
+    headline?: string
+    body?: string
+    ctwa_clid?: string
+  }
   id: string
   from: string
   timestamp: string
@@ -584,6 +595,10 @@ async function processMessage(
   )
   if (!contactOutcome) return
   const contactRecord = contactOutcome.contact
+
+  // Attribute the lead to the Click-to-WhatsApp ad that produced it, if any.
+  // First touch wins and it never throws, so it cannot affect the reply path.
+  await captureAdReferral(message.referral, contactRecord.id, accountId)
 
   // Find or create conversation
   const convResult = await findOrCreateConversation(
