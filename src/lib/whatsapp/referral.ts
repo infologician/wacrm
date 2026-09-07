@@ -92,7 +92,8 @@ async function fetchCampaignName(
  * newly working token would not backfill the ads already captured. Running it
  * on ordinary inbound traffic (throttled per account) means names appear on
  * their own shortly after a token starts working, rather than waiting for the
- * next brand new ad lead.
+ * next brand new ad lead. It also re-reads names that are over a week old, so
+ * campaigns renamed in Ads Manager correct themselves without anyone asking.
  */
 const lastSweepAt = new Map<string, number>()
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000
@@ -109,12 +110,18 @@ export async function resolvePendingCampaignNames(
     lastSweepAt.set(accountId, Date.now())
 
     const db = admin()
+
+    // Ads still missing a name, plus ads whose name was last read from Meta
+    // over a week ago, so a campaign renamed in Ads Manager catches up on its
+    // own. Rows whose name was typed by a person have no lookup_attempted_at
+    // and are deliberately never refreshed, so manual names always stick.
+    const staleBefore = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
     const { data: pending } = await db
       .from('ad_campaigns')
       .select('ad_id')
       .eq('account_id', accountId)
-      .is('campaign_name', null)
-      .limit(10)
+      .or(`campaign_name.is.null,lookup_attempted_at.lt.${staleBefore}`)
+      .limit(25)
 
     if (!pending?.length) return
 
