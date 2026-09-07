@@ -3,7 +3,10 @@ import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { captureAdReferral } from '@/lib/whatsapp/referral'
+import {
+  captureAdReferral,
+  resolvePendingCampaignNames,
+} from '@/lib/whatsapp/referral'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
@@ -598,7 +601,15 @@ async function processMessage(
 
   // Attribute the lead to the Click-to-WhatsApp ad that produced it, if any.
   // First touch wins and it never throws, so it cannot affect the reply path.
-  await captureAdReferral(message.referral, contactRecord.id, accountId)
+  await captureAdReferral(
+    message.referral,
+    contactRecord.id,
+    accountId,
+    accessToken
+  )
+  // Fill in campaign names for any ads still missing one. Throttled per
+  // account, so ordinary traffic backfills names once a token can read them.
+  await resolvePendingCampaignNames(accountId, accessToken)
 
   // Find or create conversation
   const convResult = await findOrCreateConversation(
