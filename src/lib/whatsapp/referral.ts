@@ -48,9 +48,10 @@ function admin(): SupabaseClient {
 async function fetchCampaignName(
   adId: string,
   fallbackToken?: string | null
-): Promise<string | null> {
+): Promise<{ name: string | null; error: string | null }> {
+  const usingEnvToken = Boolean(process.env.META_ADS_ACCESS_TOKEN)
   const token = process.env.META_ADS_ACCESS_TOKEN || fallbackToken
-  if (!token) return null
+  if (!token) return { name: null, error: 'no token available' }
 
   try {
     const url =
@@ -64,20 +65,23 @@ async function fetchCampaignName(
     }
 
     if (!res.ok || json?.error) {
-      console.error(
-        '[referral] campaign lookup failed:',
-        adId,
-        res.status,
-        json?.error?.code,
-        json?.error?.message
-      )
-      return null
+      const why =
+        `HTTP ${res.status} code=${json?.error?.code ?? '?'} ` +
+        `${json?.error?.message ?? 'unknown'} ` +
+        `(token=${usingEnvToken ? 'META_ADS_ACCESS_TOKEN' : 'whatsapp'})`
+      console.error('[referral] campaign lookup failed:', adId, why)
+      return { name: null, error: why }
     }
 
-    return json?.campaign?.name?.trim() || null
+    const name = json?.campaign?.name?.trim() || null
+    return {
+      name,
+      error: name ? null : 'lookup succeeded but returned no campaign name',
+    }
   } catch (err) {
-    console.error('[referral] campaign lookup error:', adId, err)
-    return null
+    const why = `request failed: ${err instanceof Error ? err.message : String(err)}`
+    console.error('[referral] campaign lookup error:', adId, why)
+    return { name: null, error: why }
   }
 }
 
@@ -115,14 +119,18 @@ export async function resolvePendingCampaignNames(
     if (!pending?.length) return
 
     for (const row of pending) {
-      const name = await fetchCampaignName(row.ad_id, accessToken)
-      if (!name) continue
+      const { name, error } = await fetchCampaignName(row.ad_id, accessToken)
 
-      // The trigger on ad_campaigns pushes this out to every contact that
-      // came from this ad, so one update relabels all of their leads.
+      // Record the outcome either way. Storing WHY a lookup failed turns a
+      // silent blank column into something diagnosable without server logs.
       await db
         .from('ad_campaigns')
-        .update({ campaign_name: name, updated_at: new Date().toISOString() })
+        .update({
+          ...(name ? { campaign_name: name } : {}),
+          lookup_error: error,
+          lookup_attempted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
         .eq('ad_id', row.ad_id)
         .eq('account_id', accountId)
     }
@@ -156,9 +164,13 @@ export async function captureAdReferral(
       .eq('account_id', accountId)
       .maybeSingle()
 
-    const campaignName =
-      existing?.campaign_name?.trim() ||
-      (await fetchCampaignName(adId, accessToken))
+    let campaignName = existing?.campaign_name?.trim() || null
+    let lookupError: string | null = null
+    if (!campaignName) {
+      const looked = await fetchCampaignName(adId, accessToken)
+      campaignName = looked.name
+      lookupError = looked.error
+    }
 
     // A name already stored — whether fetched from Meta or typed by a person
     // in the CRM — is read back above and passed through, never clobbered.
@@ -169,6 +181,8 @@ export async function captureAdReferral(
         campaign_name: campaignName,
         ad_headline: headline,
         source_type: sourceType,
+        lookup_error: lookupError,
+        lookup_attempted_at: now,
         last_seen_at: now,
         updated_at: now,
       },
