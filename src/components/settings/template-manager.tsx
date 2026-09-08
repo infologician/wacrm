@@ -156,6 +156,24 @@ export function TemplateManager() {
     () => extractVariableIndices(form.body_text).length,
     [form.body_text],
   );
+
+  // Keep exactly one sample value per {{n}} in the body. Meta requires an
+  // example for every variable, and the inputs below are rendered from
+  // body_samples - so without this sync the array stays empty, no input is
+  // ever shown, and a template using a variable cannot be submitted at all.
+  useEffect(() => {
+    setForm((prev) => {
+      const current = prev.body_samples ?? []
+      if (current.length === bodyVarCount) return prev
+      return {
+        ...prev,
+        body_samples: Array.from(
+          { length: bodyVarCount },
+          (_, i) => current[i] ?? ''
+        ),
+      }
+    })
+  }, [bodyVarCount])
   const headerVarCount = useMemo(
     () =>
       form.header_format === 'text'
